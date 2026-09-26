@@ -66,20 +66,29 @@ def _run_subprocess(
         return exit_code, combined, None, duration
 
     except subprocess.TimeoutExpired:
-        # Process group cleanup to prevent orphaned background processes
+        # Terminate the entire process group to prevent orphaned background processes
         if os.name == "posix":
             try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
+                pgid = os.getpgid(process.pid)
+                os.killpg(pgid, signal.SIGKILL)
+            except (ProcessLookupError, OSError):
                 pass
         else:
-            process.kill()
+            try:
+                process.kill()
+            except (ProcessLookupError, OSError):
+                pass
 
         try:
             stdout, stderr = process.communicate(timeout=2)
             combined = (stdout or "") + (stderr or "")
-        except Exception:
+        except (subprocess.TimeoutExpired, OSError):
             combined = ""
+            try:
+                process.kill()
+                process.wait(timeout=1)
+            except (ProcessLookupError, OSError, subprocess.TimeoutExpired):
+                pass
 
         duration = time.perf_counter() - start_time
         return 124, combined.strip(), f"Command timed out after {timeout} seconds.", duration

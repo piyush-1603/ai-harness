@@ -239,11 +239,24 @@ class TestShellOps(unittest.TestCase):
         self.assertFalse(res.success)
         self.assertEqual(res.exit_code, 124)
 
-        time.sleep(0.2)
-        if pid_file.exists():
-            child_pid = int(pid_file.read_text().strip())
-            with self.assertRaises(OSError):
+        self.assertTrue(pid_file.exists(), "child.pid file should be created by background process")
+        child_pid = int(pid_file.read_text().strip())
+        self.assertGreater(child_pid, 0)
+
+        # Confirm child process is terminated (not running)
+        terminated = False
+        deadline = time.time() + 2.0
+        while time.time() < deadline:
+            try:
                 os.kill(child_pid, 0)
+                time.sleep(0.05)
+            except OSError:
+                terminated = True
+                break
+
+        self.assertTrue(terminated, f"Child process {child_pid} was not terminated on timeout")
+        with self.assertRaises(OSError):
+            os.kill(child_pid, 0)
 
     def test_environment_inheritance(self):
         res = run_bash('echo "CUSTOM=$MY_TEST_VAR"', workspace_dir=str(self.ws), env={"MY_TEST_VAR": "passed_val"})
