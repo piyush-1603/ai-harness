@@ -248,3 +248,30 @@ def git_status(workspace_dir: Optional[str] = None) -> ToolResult:
         error=err_msg if exit_code != 0 else None,
         duration_sec=duration,
     )
+
+def git_reset_hard(workspace_dir: Optional[str] = None) -> ToolResult:
+    """Wipes all uncommitted changes and new files, restoring a clean working tree."""
+    start_time = time.perf_counter()
+    try:
+        ws_path = resolve_workspace_path(".", workspace_dir)
+    except PermissionError as e:
+        return ToolResult(
+            tool_name=ToolName.RUN_BASH,
+            success=False,
+            output="",
+            exit_code=1,
+            error=str(e),
+            duration_sec=time.perf_counter() - start_time,
+        )
+
+    cmd = "git reset --hard HEAD && git clean -fd"
+    exit_code, output, err_msg, duration = _run_subprocess(command=cmd, cwd=str(ws_path), timeout=30)
+    
+    return ToolResult(
+        tool_name=ToolName.RUN_BASH,
+        success=(exit_code == 0),
+        output=truncate_output(output),
+        exit_code=exit_code,
+        error=err_msg if exit_code != 0 else None,
+        duration_sec=duration,
+    )

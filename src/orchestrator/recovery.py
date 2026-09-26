@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from enum import Enum, auto
 import hashlib
+import re
 
 class RecoveryDecision(Enum):
     RETRY_EDIT = auto()
@@ -23,14 +24,21 @@ class RecoveryManager:
         self.signature_history: list[str] = []
         self.stuck_counter = 0
 
+    def _normalize_error(self, error_text: str) -> str:
+        text = re.sub(r'0x[0-9a-fA-F]+', '0x...', error_text)
+        text = re.sub(r'line \d+', 'line X', text)
+        text = re.sub(r'\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}', '<timestamp>', text)
+        text = re.sub(r'\d+\.\d+s?', '<time>', text)
+        return hashlib.md5(text.encode()).hexdigest()
+
     def analyze_failure(self, failing_tests: list, stderr: str) -> RecoveryAdvice:
-        raw_sig = ",".join(sorted(failing_tests)) if failing_tests else stderr[:100]
+        raw_sig = ",".join(sorted(failing_tests)) if failing_tests else stderr[:200]
         
         # Empty signature edge case guard
         if not raw_sig.strip():
             error_signature = f"empty_{hashlib.md5(str(len(self.signature_history)).encode()).hexdigest()}"
         else:
-            error_signature = raw_sig
+            error_signature = self._normalize_error(raw_sig)
 
         # Check for repeat within last 4 signatures
         if error_signature in self.signature_history[-4:]:
