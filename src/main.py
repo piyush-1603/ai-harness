@@ -151,10 +151,15 @@ def main():
     if report.get("last_error"):
         print(f"Last Error: {report['last_error']}")
 
-    scratchpad = report.get("scratchpad")
-    if scratchpad:
-        hypothesis = getattr(scratchpad, "hypothesis", None) or getattr(scratchpad, "active_hypothesis", "")
-        print(f"Final Hypothesis: {hypothesis}")
+    if "telemetry" in report:
+        print("\n--- Telemetry Report ---")
+        tel = report["telemetry"]
+        print(f"Total Model Calls: {tel.total_model_calls}")
+        print(f"Total Tool Calls:  {tel.total_tool_calls}")
+        print(f"Prompt Tokens:     {tel.prompt_tokens}")
+        print(f"Completion Tokens: {tel.completion_tokens}")
+        print(f"Files Modified:    {len(tel.files_modified)}")
+        print(f"Time Elapsed:      {tel.total_wall_time_sec:.2f}s")
 
     if report.get("status") in ("resolved", "completed") and report.get("verified", False):
         sys.exit(0)
