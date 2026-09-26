@@ -158,8 +158,22 @@ class ContextBuilder:
                 if overview_lines:
                     repository_overview = "\n".join(overview_lines)
 
+            expansion_plan_files = []
+            if cfg.include_symbols or cfg.include_local_imports:
+                from src.context.expansion import FailureAwareExpander
+                from src.context.policy import PressureLevel
+
+                try:
+                    pressure = PressureLevel(cfg.pressure_level)
+                except ValueError:
+                    pressure = PressureLevel.LOW
+
+                expander = FailureAwareExpander(max_expanded_files=getattr(cfg, "max_expanded_files", 20))
+                expansion_plan = expander.expand(state, repo, pressure)
+                expansion_plan_files = expansion_plan.expanded_files
+
             focus_files = []
-            for f in relevant_files + touched_files:
+            for f in relevant_files + touched_files + expansion_plan_files:
                 if f not in focus_files:
                     focus_files.append(f)
 
@@ -176,23 +190,8 @@ class ContextBuilder:
                             local_import_neighbors.append(imp)
 
             if cfg.include_symbols:
-                from src.context.expansion import FailureAwareExpander
-                from src.context.policy import PressureLevel
-
-                try:
-                    pressure = PressureLevel(cfg.pressure_level)
-                except ValueError:
-                    pressure = PressureLevel.LOW
-
-                expander = FailureAwareExpander(max_expanded_files=getattr(cfg, "max_expanded_files", 20))
-                expansion_plan = expander.expand(state, repo, pressure)
-
                 eligible_symbol_files = []
                 for f in focus_files:
-                    if f in repo.file_symbols and f not in eligible_symbol_files:
-                        eligible_symbol_files.append(f)
-                
-                for f in expansion_plan.expanded_files:
                     if f in repo.file_symbols and f not in eligible_symbol_files:
                         eligible_symbol_files.append(f)
 

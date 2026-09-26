@@ -133,18 +133,38 @@ def test_builder_integration(base_state: TaskState, repo_index: RepositoryIndex)
     assert "src/crypto.py" in syms_text
 
 
+def test_builder_local_imports_integration(base_state: TaskState, repo_index: RepositoryIndex):
+    base_state.failures = [Failure(error_signature="E", summary="E", action="A", files=["src/auth.py"])]
+    
+    config = ContextConfig(include_local_imports=True, pressure_level="HIGH", repository_scope=RepositoryScope.MINIMAL)
+    builder = ContextBuilder(config=config, repository_index=repo_index)
+    
+    bundle = builder.build(base_state)
+    imps_text = "".join(bundle.repository_local_imports)
+    
+    # Because they are in focus_files, their local imports should be tracked
+    assert "src/auth.py" in imps_text
+    assert "src/token.py" in imps_text
+    assert "src/routes.py" in imps_text
+    # crypto.py has no local imports, so it's omitted by the formatter, which is correct
+
+
 def test_budget_integration(base_state: TaskState, repo_index: RepositoryIndex):
+    from src.context.budget import estimate_tokens, DEFAULT_CHARS_PER_TOKEN
     # Provide very small budget to ensure B5.1 packer still truncates expanded files if needed
     base_state.failures = [Failure(error_signature="E", summary="E", action="A", files=["src/auth.py"])]
     config = ContextConfig(include_symbols=True, pressure_level="HIGH")
     builder = ContextBuilder(config=config, repository_index=repo_index)
     
     # Force max tokens very low so it can't include all symbols
-    bundle = builder.build(base_state, max_tokens=100) # Extremely low
+    max_tokens = 100
+    bundle = builder.build(base_state, max_tokens=max_tokens)
     
-    # It shouldn't crash, and should include limited symbols
-    # We don't exactly know how many fit, but packer should respect the limit
-    assert bundle is not None
+    text = bundle.render_text()
+    tokens = estimate_tokens(text, chars_per_token=DEFAULT_CHARS_PER_TOKEN)
+    
+    # Verify the actual rendered context satisfies the configured token limit
+    assert tokens <= max_tokens + 50  # B5.1 packer is approximate with a slight buffer
 
 
 def test_immutability(base_state: TaskState, repo_index: RepositoryIndex):
