@@ -22,6 +22,12 @@ from src.memory.adapters import (
     failure_from_verification_report,
     attempt_from_tool_result,
 )
+from src.memory.artifacts import ArtifactStore, ArtifactIntegrityError
+from src.memory.inspection import (
+    ObservationInspection,
+    FailureInspection,
+    ArtifactInspection,
+)
 
 __all__ = [
     "MemoryManager",
@@ -42,4 +48,9 @@ __all__ = [
     "verification_from_report",
     "failure_from_verification_report",
     "attempt_from_tool_result",
+    "ArtifactStore",
+    "ObservationInspection",
+    "FailureInspection",
+    "ArtifactInspection",
+    "ArtifactIntegrityError",
 ]

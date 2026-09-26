@@ -68,19 +68,8 @@ class ModelAdapter:
         mock_mode: bool = False,
         mock_responses: Optional[List[str]] = None,
     ) -> None:
-        env_mock = os.environ.get("HARNESS_MOCK_MODE", "").lower() in ("true", "1", "yes")
-        self.mock_mode = mock_mode or env_mock
-        if mock_responses is not None:
-            self._mock_responses = list(mock_responses)
-        elif self.mock_mode and os.environ.get("HARNESS_MOCK_RESPONSES"):
-            try:
-                self._mock_responses = json.loads(os.environ["HARNESS_MOCK_RESPONSES"])
-            except Exception:
-                self._mock_responses = [os.environ["HARNESS_MOCK_RESPONSES"]]
-        elif self.mock_mode:
-            self._mock_responses = [json.dumps({"action": "complete", "message": "Task completed in mock mode."})]
-        else:
-            self._mock_responses = []
+        self.mock_mode = bool(mock_mode)
+        self._mock_responses = list(mock_responses or [])
         self._mock_index = 0
         self.timeout = float(timeout)
 
