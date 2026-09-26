@@ -259,6 +259,55 @@ class TestVerificationEngine(unittest.TestCase):
         for f in ["a_file.py", "calculator.py", "m_file.py", "z_file.py"]:
             self.assertIn(f, report.files_modified)
 
+    def test_verification_engine_timeout_classification(self):
+        # GAP-1: VerificationEngine timeout classification
+        self.code_file.write_text("def calculate(a, b):\n    return a + b\n", encoding="utf-8")
+
+        fast_verifier = VerificationEngine(default_timeout=1)
+        report = fast_verifier.verify(
+            workspace_dir=str(self.ws),
+            test_command='python3 -c "import time; time.sleep(3)"',
+        )
+
+        self.assertEqual(report.status, VerificationStatus.FAILED)
+        self.assertFalse(report.is_verified)
+        self.assertFalse(report.tests_passed)
+        self.assertEqual(report.failure_classification, FailureClassification.TIMEOUT)
+        self.assertIn("failed with exit code 124", report.summary)
+
+    def test_verification_engine_command_execution_failure(self):
+        # GAP-2: VerificationEngine command execution failure
+        self.code_file.write_text("def calculate(a, b):\n    return a + b\n", encoding="utf-8")
+
+        nonexistent_cmd = "nonexistent_test_runner_command_xyz123"
+        report = self.verifier.verify(
+            workspace_dir=str(self.ws),
+            test_command=nonexistent_cmd,
+        )
+
+        self.assertEqual(report.status, VerificationStatus.FAILED)
+        self.assertFalse(report.is_verified)
+        self.assertFalse(report.tests_passed)
+        self.assertEqual(report.failure_classification, FailureClassification.TEST_EXECUTION_ERROR)
+        self.assertIn(nonexistent_cmd, report.summary)
+        self.assertIn("failed with exit code", report.summary)
+
+    def test_verification_engine_silent_non_zero_failure(self):
+        # GAP-3: VerificationEngine silent non-zero failure
+        self.code_file.write_text("def calculate(a, b):\n    return a + b\n", encoding="utf-8")
+
+        report = self.verifier.verify(
+            workspace_dir=str(self.ws),
+            test_command='python3 -c "import sys; sys.exit(42)"',
+        )
+
+        self.assertEqual(report.status, VerificationStatus.FAILED)
+        self.assertFalse(report.is_verified)
+        self.assertFalse(report.tests_passed)
+        self.assertEqual(report.failure_classification, FailureClassification.TEST_EXECUTION_ERROR)
+        self.assertEqual(report.test_output, "")
+        self.assertIn("exit code 42", report.summary)
+
 
 if __name__ == "__main__":
     unittest.main()
