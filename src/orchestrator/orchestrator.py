@@ -63,6 +63,7 @@ from src.orchestrator.model_adapter import (
 from src.orchestrator.prompting import PromptBuilder
 from src.orchestrator.recovery import RecoveryDecision, RecoveryManager
 from src.tools.registry import ToolEngine
+from src.tools.shell_ops import git_reset_hard
 from src.verification.verifier import VerificationEngine
 
 logger = logging.getLogger(__name__)
@@ -182,10 +183,6 @@ class Orchestrator:
             return self._run_legacy(issue_str)
 
         return self._run_real_loop(task)
-
-    # -----------------------------------------------------------------------
-    # Real Model <-> Tool Loop (Slice 3)
-    # -----------------------------------------------------------------------
 
     def _run_real_loop(self, task: Union[TaskSpec, str]) -> dict:
         if isinstance(task, TaskSpec):
@@ -535,8 +532,19 @@ class Orchestrator:
                     "recovery_hint": advice.hint,
                     "decision": advice.decision.name,
                 }
-                last_tool_call = None
-                last_tool_result = None
+                # Bounded verification evidence for last_tool_call
+                summary = v_sum
+                classification = f_class
+                output_excerpt = (t_out or "")[:1000]
+                bounded_output = f"{summary}\nClassification: {classification}\nOutput:\n{output_excerpt}\nRecovery Hint: {advice.hint}"
+
+                last_tool_call = ToolCall(call_id="verify", tool_name=ToolName.RUN_BASH, tool_args={"command": "verify"})
+                last_tool_result = ToolResult(
+                    tool_name=ToolName.RUN_BASH,
+                    success=False,
+                    output=bounded_output,
+                    error=None,
+                )
                 continue
 
             elif isinstance(decision, ToolCall):

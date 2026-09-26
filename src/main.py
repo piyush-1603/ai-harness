@@ -12,6 +12,7 @@ from src.orchestrator.model_adapter import ModelAdapter
 from src.orchestrator.orchestrator import Orchestrator, OrchestratorConfig
 from src.tools.file_ops import truncate_output
 from src.tools.registry import ToolEngine
+from src.auth.github_auth import check_repo_access, clone_authenticated, parse_repo_identifier
 from src.verification.verifier import VerificationEngine
 
 
@@ -65,26 +66,71 @@ def main():
     parser.add_argument(
         "--test-command",
         type=str,
-        default=os.environ.get("HARNESS_TEST_COMMAND"),
+        default=os.environ.get("HARNESS_TEST_COMMAND", ""),
         help="Command to run tests for verification.",
     )
+    parser.add_argument("--repo", type=str, help="GitHub repository to authenticate and clone (e.g. owner/name)")
+    parser.add_argument("--github-token", type=str, default=os.environ.get("GITHUB_TOKEN", ""), help="GitHub token for auth")
+    parser.add_argument("--require-auth", action="store_true", help="Require authorization via --repo")
+    parser.add_argument("--mock", action="store_true", help="Run with a mocked ModelAdapter")
+
     args = parser.parse_args()
 
     workspace_dir = os.environ.get("HARNESS_WORKSPACE_DIR") or args.workspace or "."
     max_steps = int(os.environ.get("HARNESS_MAX_STEPS") or args.max_attempts or 30)
-
     test_command = args.test_command or os.environ.get("HARNESS_TEST_COMMAND")
+
+    # --- Auth Hardening Gate ---
+    require_auth = args.require_auth or os.environ.get("HARNESS_REQUIRE_AUTH", "").lower() in ("true", "1")
+    if require_auth and not args.repo:
+        print("Error: --require-auth is set but --repo is missing.", file=sys.stderr)
+        sys.exit(1)
+
+    auth_result = None
+    if args.repo:
+        auth_result = check_repo_access(args.repo, args.github_token)
+        print(f"Authorized {auth_result.owner}/{auth_result.name}")
+        
+        if not os.path.exists(workspace_dir):
+            clone_authenticated(args.repo, workspace_dir, args.github_token)
+        else:
+            # Check if workspace is non-empty
+            if os.path.isdir(workspace_dir) and os.listdir(workspace_dir):
+                import subprocess
+                try:
+                    res = subprocess.run(
+                        ["git", "remote", "get-url", "origin"],
+                        cwd=workspace_dir,
+                        capture_output=True,
+                        text=True,
+                        check=True
+                    )
+                    url = res.stdout.strip()
+                    if "github.com" in url:
+                        part = url.split("github.com")[-1].lstrip(":/").removesuffix(".git")
+                        ws_owner, ws_name = parse_repo_identifier(part)
+                    else:
+                        ws_owner, ws_name = "", ""
+                        
+                    if (ws_owner.lower(), ws_name.lower()) != (auth_result.owner.lower(), auth_result.name.lower()):
+                        print(f"Error: Existing workspace {workspace_dir} does not match authorized repo {auth_result.owner}/{auth_result.name}.", file=sys.stderr)
+                        sys.exit(1)
+                except subprocess.CalledProcessError:
+                    print(f"Error: Existing workspace {workspace_dir} is not a valid git repository or missing origin remote.", file=sys.stderr)
+                    sys.exit(1)
+
+    # --- Core Subsystems Initialization ---
+    verbose = os.environ.get("HARNESS_VERBOSE", "").lower() in ("true", "1", "yes")
+    if verbose:
+        print(f"Scanning repository at {workspace_dir}...")
+    repo_index = RepositoryScanner().scan(workspace_dir)
+
     task_spec = TaskSpec(
         issue_id="task-1",
         issue_description=args.issue,
         workspace_dir=workspace_dir,
         test_command=test_command,
     )
-
-    verbose = os.environ.get("HARNESS_VERBOSE", "").lower() in ("true", "1", "yes")
-    if verbose:
-        print(f"Scanning repository at {workspace_dir}...")
-    repo_index = RepositoryScanner().scan(workspace_dir)
 
     memory = MemoryManager()
     memory.initialize_task(task_id=task_spec.issue_id, task=task_spec.issue_description)
@@ -103,7 +149,17 @@ def main():
     tool_timeout = int(os.environ.get("HARNESS_TOOL_TIMEOUT", "60"))
     tool_engine = ToolEngine(workspace_dir=workspace_dir, default_timeout=tool_timeout)
     verifier = VerificationEngine()
-    model_adapter = ModelAdapter()
+    
+    # --- Model Mocking Injection ---
+    if args.mock:
+        import json
+        mock_responses = [
+            json.dumps({"tool_name": "run_bash", "tool_args": {"command": "echo 'print(\"hello world\")' > script.py"}}),
+            json.dumps({"action": "complete", "message": "I have fixed the issue by updating script.py."})
+        ]
+        model_adapter = ModelAdapter(mock_mode=True, mock_responses=mock_responses)
+    else:
+        model_adapter = ModelAdapter()
 
     config = OrchestratorConfig(step_limit=max_steps)
     orchestrator = Orchestrator(
@@ -117,8 +173,10 @@ def main():
     )
 
     print(f"Starting orchestration for issue: {args.issue}")
+
     report = orchestrator.run(task_spec)
 
+    # --- Output Generation ---
     print("\n--- Final Report ---")
     print(f"Status: {report['status']}")
     print(f"Verified: {report.get('verified', False)}")
@@ -158,13 +216,27 @@ def main():
     print(f"Attempts: {report.get('n_calls', 0)}")
     print(f"Recovery Attempts: {report.get('recovery_attempts', 0)}")
     print(f"Cost: ${report.get('cost', 0.0):.2f}")
+    
+    if auth_result:
+        report["auth"] = {
+            "owner": auth_result.owner,
+            "name": auth_result.name,
+            "authorized_at": auth_result.authorized_at
+        }
+        print(f"Auth Evidence: {auth_result.owner}/{auth_result.name}")
+
     if report.get("last_error"):
         print(f"Last Error: {report['last_error']}")
 
-    scratchpad = report.get("scratchpad")
-    if scratchpad:
-        hypothesis = getattr(scratchpad, "hypothesis", None) or getattr(scratchpad, "active_hypothesis", "")
-        print(f"Final Hypothesis: {hypothesis}")
+    if "telemetry" in report:
+        print("\n--- Telemetry Report ---")
+        tel = report["telemetry"]
+        print(f"Total Model Calls: {tel.total_model_calls}")
+        print(f"Total Tool Calls:  {tel.total_tool_calls}")
+        print(f"Prompt Tokens:     {tel.prompt_tokens}")
+        print(f"Completion Tokens: {tel.completion_tokens}")
+        print(f"Files Modified:    {len(tel.files_modified)}")
+        print(f"Time Elapsed:      {tel.total_wall_time_sec:.2f}s")
 
     telemetry = report.get("telemetry")
     if telemetry and hasattr(telemetry, "to_table"):

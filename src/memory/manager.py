@@ -23,6 +23,26 @@ from src.memory.models import (
     now_iso,
 )
 from src.memory.storage import TaskStorage
+from src.memory.artifacts import ArtifactStore
+from src.memory.inspection import (
+    ObservationInspection,
+    FailureInspection,
+    ArtifactInspection,
+)
+
+def _parse_env_int(var_name: str, default: int) -> int:
+    val = os.getenv(var_name)
+    if not val:
+        return default
+    try:
+        parsed = int(val)
+        return parsed if parsed > 0 else default
+    except ValueError:
+        return default
+
+INLINE_OUTPUT_MAX_CHARS = _parse_env_int("HARNESS_ARTIFACT_INLINE_MAX_CHARS", 4000)
+OUTPUT_PREVIEW_CHARS = _parse_env_int("HARNESS_ARTIFACT_PREVIEW_CHARS", 1200)
+
 
 
 class MemoryManager:
@@ -36,8 +56,10 @@ class MemoryManager:
         self,
         storage: Optional[TaskStorage] = None,
         base_dir: Union[Path, str] = ".harness",
+        artifact_store: Optional[ArtifactStore] = None,
     ) -> None:
         self.storage = storage or TaskStorage(base_dir=base_dir)
+        self.artifact_store = artifact_store or ArtifactStore(base_dir=base_dir)
         self._state: Optional[TaskState] = None
         self._events: list[Event] = []
 
@@ -263,6 +285,16 @@ class MemoryManager:
             observation = Observation.from_dict(observation)
         else:
             observation.files = _normalize_paths(observation.files)
+
+        if observation.raw_output is not None and observation.output_ref is None:
+            full_len = len(observation.raw_output)
+            observation.raw_output_chars = full_len
+
+            if full_len > INLINE_OUTPUT_MAX_CHARS:
+                ref = self.artifact_store.put_text(state.task_id, observation.raw_output)
+                observation.output_ref = ref
+                preview = observation.raw_output[:OUTPUT_PREVIEW_CHARS]
+                observation.raw_output = f"{preview}\n\n[FULL OUTPUT STORED: {ref}]"
 
         state.recent_observations.append(observation)
         state.updated_at = now_iso()
@@ -575,3 +607,123 @@ class MemoryManager:
     def events(self) -> list[Event]:
         """Property shorthand for get_events()."""
         return self.get_events()
+
+    # -------------------------------------------------------------------------
+    # Artifact Retrieval
+    # -------------------------------------------------------------------------
+
+    def get_artifact(self, ref: str) -> str:
+        """Retrieve the full text of an artifact associated with the current task."""
+        state = self.get_state()
+        return self.artifact_store.get_text(state.task_id, ref)
+
+    def has_artifact(self, ref: str) -> bool:
+        """Check if an artifact exists for the current task."""
+        state = self.get_state()
+        return self.artifact_store.exists(state.task_id, ref)
+
+    # -------------------------------------------------------------------------
+    # Inspection APIs
+    # -------------------------------------------------------------------------
+
+    def inspect_observation(
+        self, identifier: Union[int, str], include_full_output: bool = False
+    ) -> ObservationInspection:
+        """Inspect an observation by index or artifact reference."""
+        state = self.get_state()
+        obs = None
+        idx = -1
+
+        if isinstance(identifier, int):
+            if 0 <= identifier < len(state.recent_observations):
+                idx = identifier
+                obs = state.recent_observations[idx]
+        elif isinstance(identifier, str):
+            for i, o in enumerate(state.recent_observations):
+                if o.output_ref == identifier:
+                    idx = i
+                    obs = o
+                    break
+
+        if obs is None:
+            raise LookupError(f"Observation with identifier {identifier} not found.")
+
+        full_output = None
+        if include_full_output:
+            if obs.output_ref is not None:
+                full_output = self.artifact_store.get_text(state.task_id, obs.output_ref)
+            else:
+                full_output = obs.raw_output
+
+        return ObservationInspection(
+            index=idx,
+            type=obs.type,
+            source=obs.source,
+            summary=obs.summary,
+            files=list(obs.files),
+            timestamp=obs.timestamp,
+            raw_output_preview=obs.raw_output,
+            output_ref=obs.output_ref,
+            raw_output_chars=obs.raw_output_chars,
+            has_external_artifact=obs.output_ref is not None,
+            full_output=full_output,
+        )
+
+    def inspect_failure(self, identifier: Union[int, str]) -> FailureInspection:
+        """Inspect a failure by index or error_signature."""
+        state = self.get_state()
+        fail = None
+        idx = -1
+
+        if isinstance(identifier, int):
+            if 0 <= identifier < len(state.failures):
+                idx = identifier
+                fail = state.failures[idx]
+        elif isinstance(identifier, str):
+            for i, f in enumerate(state.failures):
+                if f.error_signature == identifier:
+                    idx = i
+                    fail = f
+                    break
+
+        if fail is None:
+            raise LookupError(f"Failure with identifier {identifier} not found.")
+
+        return FailureInspection(
+            index=idx,
+            error_signature=fail.error_signature,
+            summary=fail.summary,
+            action=fail.action,
+            files=list(fail.files),
+            occurrence_count=fail.occurrence_count,
+            resolved=fail.resolved,
+            first_seen=fail.first_seen,
+            last_seen=fail.last_seen,
+            resolved_at=fail.resolved_at,
+        )
+
+    def inspect_artifact(self, ref: str) -> ArtifactInspection:
+        """Inspect an artifact by its reference."""
+        state = self.get_state()
+
+        try:
+            content = self.artifact_store.get_text(state.task_id, ref)
+        except FileNotFoundError:
+            raise FileNotFoundError(f"Artifact {ref} not found.")
+        # ValueError from invalid format bubbles up automatically
+
+        return ArtifactInspection(
+            ref=ref,
+            content=content,
+            chars=len(content),
+            exists=True,
+        )
+
+    def list_artifact_refs(self) -> list[str]:
+        """Return unique artifact references associated with observations in deterministic order."""
+        state = self.get_state()
+        refs: list[str] = []
+        for obs in state.recent_observations:
+            if obs.output_ref and obs.output_ref not in refs:
+                refs.append(obs.output_ref)
+        return refs
