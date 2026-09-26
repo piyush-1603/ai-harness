@@ -1,5 +1,12 @@
-"""Context building and repository scanning subsystem."""
-
+from src.context.budget import (
+    ContextBudgetConfig,
+    ContextBudgetResult,
+    ContextBudgeter,
+    DEFAULT_CHARS_PER_TOKEN,
+    DEFAULT_MAX_CONTEXT_TOKENS,
+    estimate_tokens,
+    get_default_max_context_tokens,
+)
 from src.context.builder import ContextBuilder
 from src.context.bundle import ContextBundle
 from src.context.config import ContextConfig
@@ -35,6 +42,13 @@ __all__ = [
     "ContextBuilder",
     "ContextBundle",
     "ContextConfig",
+    "ContextBudgeter",
+    "ContextBudgetConfig",
+    "ContextBudgetResult",
+    "estimate_tokens",
+    "get_default_max_context_tokens",
+    "DEFAULT_MAX_CONTEXT_TOKENS",
+    "DEFAULT_CHARS_PER_TOKEN",
     "AdaptiveContextPolicy",
     "AdaptivePolicyConfig",
     "ContextProfile",
