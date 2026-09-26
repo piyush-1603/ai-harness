@@ -491,7 +491,9 @@ class MemoryManager:
             metadata=metadata or {},
         )
         self._events.append(event)
-        if self.storage and task_id != "unknown":
+        if self.storage and state is not None and task_id != "unknown":
+            # Canonical ordering: mutate TaskState -> persist TaskState -> append Event
+            self.storage.save_state(state)
             self.storage.append_event(task_id, event)
         return event
 

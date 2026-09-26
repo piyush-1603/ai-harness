@@ -521,3 +521,97 @@ def test_storage_task_exists_and_list_tasks(temp_harness_dir: Path) -> None:
     assert storage.task_exists("task-beta")
     tasks = storage.list_tasks()
     assert sorted(tasks) == ["task-alpha", "task-beta"]
+
+
+def test_crash_safe_reload_without_manual_save(temp_harness_dir: Path) -> None:
+    """
+    Verify that state mutations are automatically crash-safe and persisted
+    atomically without calling save() manually, that only the canonical event
+    log is created, and that subsequent loads preserve exact event counts.
+    """
+    task_id = "task-crash-safe-01"
+    manager1 = MemoryManager(base_dir=temp_harness_dir)
+
+    # 1. Initialize a task
+    manager1.initialize_task(task_id, "Fix crash safety ordering")
+
+    # 2. Perform several mutations
+    manager1.set_phase(Phase.EXECUTE)
+    manager1.update_plan(["1. Inspect code", "2. Fix order", "3. Test"])
+    manager1.update_hypothesis("Ordering causes event/state desync")
+    manager1.add_relevant_file("src/memory/manager.py")
+    manager1.mark_file_touched("src/memory/manager.py")
+    manager1.add_observation(
+        Observation(
+            type="code_inspect",
+            source="manual",
+            summary="Found save_state needed before append_event",
+            files=["src/memory/manager.py"],
+        )
+    )
+    manager1.add_attempt(
+        Attempt(
+            id="att-01",
+            hypothesis="Reorder in _record_event",
+            action="edit _record_event",
+            files_touched=["src/memory/manager.py"],
+            success=True,
+            iteration=1,
+        )
+    )
+    manager1.increment_iteration()
+    manager1.record_model_call(input_tokens=250, output_tokens=75)
+
+    # 3. Record the exact number of emitted events
+    original_events = manager1.get_events()
+    expected_event_count = len(original_events)
+    assert expected_event_count == 10
+
+    # Note: save() is intentionally NOT called here!
+
+    # 4. Create a fresh MemoryManager
+    manager2 = MemoryManager(base_dir=temp_harness_dir)
+
+    # 5. Load the task without calling save() manually
+    reloaded1 = manager2.load(task_id)
+
+    # 6. Verify all latest state mutations survived
+    assert reloaded1.task_id == task_id
+    assert reloaded1.phase == Phase.EXECUTE
+    assert reloaded1.plan == ["1. Inspect code", "2. Fix order", "3. Test"]
+    assert reloaded1.current_hypothesis == "Ordering causes event/state desync"
+    assert reloaded1.relevant_files == ["src/memory/manager.py"]
+    assert reloaded1.touched_files == ["src/memory/manager.py"]
+    assert len(reloaded1.recent_observations) == 1
+    assert reloaded1.recent_observations[0].summary == "Found save_state needed before append_event"
+    assert len(reloaded1.attempts) == 1
+    assert reloaded1.attempts[0].id == "att-01"
+    assert reloaded1.attempts[0].success is True
+    assert reloaded1.iteration == 1
+    assert reloaded1.model_calls == 1
+    assert reloaded1.token_usage.input_tokens == 250
+    assert reloaded1.token_usage.output_tokens == 75
+    assert reloaded1.token_usage.total_tokens == 325
+
+    # 7. Verify the loaded event count exactly equals the original count
+    loaded_events1 = manager2.get_events()
+    assert len(loaded_events1) == expected_event_count
+
+    # 8. Create another fresh manager and loads again
+    manager3 = MemoryManager(base_dir=temp_harness_dir)
+    reloaded2 = manager3.load(task_id)
+
+    # 9. Verify the event count remains exactly unchanged
+    loaded_events2 = manager3.get_events()
+    assert len(loaded_events2) == expected_event_count
+    assert reloaded2.task_id == task_id
+
+    # Verify only .harness/events/<task_id>.jsonl exists and no mirrored .events.jsonl exists
+    canonical_event_file = temp_harness_dir / "events" / f"{task_id}.jsonl"
+    assert canonical_event_file.is_file()
+
+    mirrored_event_file = temp_harness_dir / "state" / f"{task_id}.events.jsonl"
+    assert not mirrored_event_file.exists()
+
+    state_dir_event_files = list((temp_harness_dir / "state").glob("*.events.jsonl"))
+    assert len(state_dir_event_files) == 0

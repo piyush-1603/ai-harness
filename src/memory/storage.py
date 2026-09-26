@@ -29,10 +29,6 @@ class TaskStorage:
         """Return the target path for a task's JSONL event log."""
         return self.events_dir / f"{task_id}.jsonl"
 
-    def get_alt_events_path(self, task_id: str) -> Path:
-        """Alternative events path inside state_dir for maximum lookup flexibility."""
-        return self.state_dir / f"{task_id}.events.jsonl"
-
     def save_state(self, state: TaskState) -> Path:
         """
         Persist TaskState to disk atomically as JSON.
@@ -69,35 +65,22 @@ class TaskStorage:
 
     def append_event(self, task_id: str, event: Event) -> None:
         """
-        Append an event record to the append-only event log.
-        Writes to both the events directory and state directory for compatibility.
+        Append an event record to the canonical event log (.harness/events/<task_id>.jsonl).
         """
         self.events_dir.mkdir(parents=True, exist_ok=True)
-        self.state_dir.mkdir(parents=True, exist_ok=True)
-
         event_line = json.dumps(event.to_dict()) + "\n"
 
-        # Primary event log path
         events_path = self.get_events_path(task_id)
         with open(events_path, "a", encoding="utf-8") as f:
             f.write(event_line)
             f.flush()
 
-        # Secondary event log path in state_dir for maximum discovery compatibility
-        alt_path = self.get_alt_events_path(task_id)
-        with open(alt_path, "a", encoding="utf-8") as f:
-            f.write(event_line)
-            f.flush()
-
     def load_events(self, task_id: str) -> list[Event]:
         """
-        Read and deserialize all events from the event log for a given task_id.
-        Returns an empty list if no log exists yet.
+        Read and deserialize all events from the canonical event log for a given task_id.
+        Returns an empty list when it does not exist.
         """
         events_path = self.get_events_path(task_id)
-        if not events_path.is_file():
-            events_path = self.get_alt_events_path(task_id)
-
         if not events_path.is_file():
             return []
 
