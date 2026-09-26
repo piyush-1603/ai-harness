@@ -66,6 +66,7 @@ from src.orchestrator.model_adapter import (
 from src.orchestrator.prompting import PromptBuilder
 from src.orchestrator.recovery import RecoveryDecision, RecoveryManager
 from src.tools.registry import ToolEngine
+from src.tools.shell_ops import git_reset_hard
 
 logger = logging.getLogger(__name__)
 
@@ -174,15 +175,7 @@ class Orchestrator:
 
     def run(self, task: Union[TaskSpec, str]) -> dict:
         """Drive the orchestrator loop for an issue. Returns a report dict."""
-        if self._is_legacy_stub:
-            issue_str = task.issue_description if isinstance(task, TaskSpec) else str(task)
-            return self._run_legacy(issue_str)
-
         return self._run_real_loop(task)
-
-    # -----------------------------------------------------------------------
-    # Real Model <-> Tool Loop (Slice 3)
-    # -----------------------------------------------------------------------
 
     def _run_real_loop(self, task: Union[TaskSpec, str]) -> dict:
         if isinstance(task, TaskSpec):
@@ -311,15 +304,41 @@ class Orchestrator:
                     elif verification_report.summary:
                         self.memory_manager.set_current_errors([verification_report.summary])
                     
+
+                    # Step 1: Use RecoveryManager to analyze the failure
+                    # Since we don't have exactly failing_tests array natively populated yet, we'll pass empty list
+                    # and rely on the text output for signature generation.
+                    advice = self.recovery_manager.analyze_failure(
+                        failing_tests=[],
+                        stderr=verification_report.test_output or verification_report.summary or ""
+                    )
+                    
+                    if advice.decision == RecoveryDecision.FORCE_EXPLORE:
+                        git_reset_hard(workspace_dir=task_spec.workspace_dir)
+                        recovery_hint = advice.hint
+                    elif advice.decision == RecoveryDecision.RETRY_EDIT:
+                        recovery_hint = advice.hint
+                    else: # ESCALATE
+                        return self._make_report(
+                            status="blocked_step_cap" if "limit" in str(advice.hint).lower() else "blocked",
+                            step_count=step_count,
+                            task_spec=task_spec,
+                            last_error=self.last_error or "Escalated to human",
+                            start_time=start_time,
+                        )
+                        
+                    # End Step 1
+                    
                     self.memory_manager.set_phase(Phase.RECOVER)
                     
                     last_tool_call = ToolCall(call_id="verify", tool_name=ToolName.RUN_BASH, tool_args={"command": "verify"})
                     
-                    # Bounded verification evidence (Point 4)
+                    # Bounded verification evidence
                     summary = verification_report.summary or "Verification failed"
                     classification = verification_report.failure_classification.value if verification_report.failure_classification else "UNKNOWN"
                     output_excerpt = (verification_report.test_output or "")[:1000]
-                    bounded_output = f"{summary}\nClassification: {classification}\nOutput:\n{output_excerpt}"
+                    bounded_output = f"{summary}\nClassification: {classification}\nOutput:\n{output_excerpt}\nRecovery Hint: {recovery_hint}"
+
                     
                     last_tool_result = ToolResult(
                         tool_name=ToolName.RUN_BASH,
@@ -515,96 +534,4 @@ class Orchestrator:
             "scratchpad": sp,
             "telemetry": telemetry,
         }
-
-    # -----------------------------------------------------------------------
-    # Legacy Stub Handlers (Backward Compatibility for Unit Tests)
-    # -----------------------------------------------------------------------
-
-    def _run_legacy(self, issue: str) -> dict:
-        self.context.update_scratchpad(hypothesis=f"Investigating: {issue}")
-
-        while self.n_calls < self.config.step_limit and self.cost < self.config.cost_limit:
-            self.n_calls += 1
-            self.cost += 0.05
-
-            if self.state in (State.EXPLORING, State.EDITING):
-                self._run_tool_loop(issue)
-
-            elif self.state == State.TESTING:
-                self._test()
-            # Check immediately after testing to avoid loop termination false negatives
-            if self.state == State.DONE:
-                return self._report("resolved")
-            elif self.state == State.ESCALATE:
-                return self._report("blocked")
-
-        # Check one last time before declaring blocked_step_cap
-        if self.state == State.DONE:
-            return self._report("resolved")
-
-        # Ran out of attempts without resolving or explicitly escalating
-        self.state = State.ESCALATE
-        return self._report("blocked_step_cap")
-
-    # -- state handlers ----------------------------------------------------
-
-    def _run_tool_loop(self, issue: str):
-        last_obs = self.context.get_scratchpad().attempt_history[-1] if self.context.get_scratchpad().attempt_history else "No observation yet."
-        hint = self.recovery_manager.last_error_signature if self.state == State.EDITING else None
-        
-        prompt = self.prompt_builder.build_turn_prompt(
-            issue=issue,
-            scratchpad_state=self.context.get_scratchpad(),
-            last_observation=last_obs,
-            recovery_hint=hint
-        )
-        decision = self.model.decide(prompt)
-        
-        if isinstance(decision, ModelCompletion):
-            if self.state == State.EXPLORING:
-                self.state = State.EDITING
-            else:
-                self.state = State.TESTING
-        else:
-            result: ToolResult = self.tool_engine.execute(decision)
-            self.context.update_scratchpad(attempt=f"{self.state.name} tool {decision.tool_name.value} output: {result.output[:200]}")
-
-    def _test(self):
-        verification: VerificationResult = self.verifier.verify()
-
-        if verification.passed:
-            self.state = State.DONE
-            self.recovery_manager.reset()
-            return
-
-        advice = self.recovery_manager.analyze_failure(
-            verification.failing_tests, verification.stderr
-        )
-
-        last_observation = verification.failing_tests or verification.stderr[:100]
-        self.context.update_scratchpad(
-            attempt=f"test failed: {last_observation}"
-        )
-
-        if advice.decision == RecoveryDecision.FORCE_EXPLORE:
-            self.context.update_scratchpad(hypothesis=advice.hint)
-            self.state = State.EXPLORING
-        elif advice.decision == RecoveryDecision.RETRY_EDIT:
-            self.state = State.EDITING
-        else:
-            self.state = State.ESCALATE
-
-    def _report(self, status: str) -> dict:
-        return {
-            "status": status,
-            "n_calls": self.n_calls,
-            "cost": self.cost,
-            "last_error": self.recovery_manager.last_error_signature,
-            "scratchpad": self.context.get_scratchpad(),
-        }
-
-
-# ---------------------------------------------------------------------------
-# Stubs for backward-compatible imports and testing
-# ---------------------------------------------------------------------------
 
