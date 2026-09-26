@@ -22,6 +22,7 @@ from src.memory.adapters import (
     failure_from_verification_report,
     attempt_from_tool_result,
 )
+from src.memory.artifacts import ArtifactStore
 
 __all__ = [
     "MemoryManager",
@@ -42,4 +43,5 @@ __all__ = [
     "verification_from_report",
     "failure_from_verification_report",
     "attempt_from_tool_result",
+    "ArtifactStore",
 ]

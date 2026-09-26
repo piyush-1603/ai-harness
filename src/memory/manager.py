@@ -23,6 +23,21 @@ from src.memory.models import (
     now_iso,
 )
 from src.memory.storage import TaskStorage
+from src.memory.artifacts import ArtifactStore
+
+def _parse_env_int(var_name: str, default: int) -> int:
+    val = os.getenv(var_name)
+    if not val:
+        return default
+    try:
+        parsed = int(val)
+        return parsed if parsed > 0 else default
+    except ValueError:
+        return default
+
+INLINE_OUTPUT_MAX_CHARS = _parse_env_int("HARNESS_ARTIFACT_INLINE_MAX_CHARS", 4000)
+OUTPUT_PREVIEW_CHARS = _parse_env_int("HARNESS_ARTIFACT_PREVIEW_CHARS", 1200)
+
 
 
 class MemoryManager:
@@ -36,8 +51,10 @@ class MemoryManager:
         self,
         storage: Optional[TaskStorage] = None,
         base_dir: Union[Path, str] = ".harness",
+        artifact_store: Optional[ArtifactStore] = None,
     ) -> None:
         self.storage = storage or TaskStorage(base_dir=base_dir)
+        self.artifact_store = artifact_store or ArtifactStore(base_dir=base_dir)
         self._state: Optional[TaskState] = None
         self._events: list[Event] = []
 
@@ -263,6 +280,16 @@ class MemoryManager:
             observation = Observation.from_dict(observation)
         else:
             observation.files = _normalize_paths(observation.files)
+
+        if observation.raw_output is not None and observation.output_ref is None:
+            full_len = len(observation.raw_output)
+            observation.raw_output_chars = full_len
+
+            if full_len > INLINE_OUTPUT_MAX_CHARS:
+                ref = self.artifact_store.put_text(state.task_id, observation.raw_output)
+                observation.output_ref = ref
+                preview = observation.raw_output[:OUTPUT_PREVIEW_CHARS]
+                observation.raw_output = f"{preview}\n\n[FULL OUTPUT STORED: {ref}]"
 
         state.recent_observations.append(observation)
         state.updated_at = now_iso()
@@ -575,3 +602,17 @@ class MemoryManager:
     def events(self) -> list[Event]:
         """Property shorthand for get_events()."""
         return self.get_events()
+
+    # -------------------------------------------------------------------------
+    # Artifact Retrieval
+    # -------------------------------------------------------------------------
+
+    def get_artifact(self, ref: str) -> str:
+        """Retrieve the full text of an artifact associated with the current task."""
+        state = self.get_state()
+        return self.artifact_store.get_text(state.task_id, ref)
+
+    def has_artifact(self, ref: str) -> bool:
+        """Check if an artifact exists for the current task."""
+        state = self.get_state()
+        return self.artifact_store.exists(state.task_id, ref)

@@ -435,6 +435,8 @@ class ContextBuilder:
                 source=o.source,
                 summary=o.summary,
                 raw_output=o.raw_output if cfg.include_raw_output else None,
+                output_ref=o.output_ref if cfg.include_raw_output else None,
+                raw_output_chars=o.raw_output_chars,
                 files=list(o.files),
                 timestamp=o.timestamp,
             ) for o in out_obs
