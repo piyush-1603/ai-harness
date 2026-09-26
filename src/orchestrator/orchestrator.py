@@ -15,6 +15,9 @@ from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Optional
 
+from src.orchestrator.recovery import RecoveryManager, RecoveryDecision
+from src.orchestrator.prompting import PromptBuilder
+
 
 # ---------------------------------------------------------------------------
 # Shared interface contract (Section 7 of the PRD). Agree on this with
@@ -68,8 +71,8 @@ class Orchestrator:
         self.max_attempts = max_attempts
         self.state = State.EXPLORING
         self.attempts = 0
-        self.last_error: Optional[str] = None
-        self.consecutive_same_error = 0
+        self.recovery_manager = RecoveryManager()
+        self.prompt_builder = PromptBuilder()
 
     def run(self, issue: str) -> dict:
         """Drive the loop for one issue. Returns a final report dict."""
@@ -116,40 +119,40 @@ class Orchestrator:
 
         if verification.passed:
             self.state = State.DONE
-            self.last_error = None
-            self.consecutive_same_error = 0
+            self.recovery_manager.reset()
             return
 
-        # Failed — this is the recovery decision point.
-        error_signature = ",".join(sorted(verification.failing_tests)) or verification.stderr[:100]
-
-        if error_signature == self.last_error:
-            self.consecutive_same_error += 1
-        else:
-            self.consecutive_same_error = 1
-        self.last_error = error_signature
-
-        self.context.update_scratchpad(
-            attempt=f"test failed: {verification.failing_tests or verification.stderr[:200]}"
+        # Failed — delegate to distinct recovery layer
+        advice = self.recovery_manager.analyze_failure(
+            verification.failing_tests, verification.stderr
         )
 
-        if self.consecutive_same_error >= 2:
-            # Same failure twice in a row -> don't retry blindly, force a
-            # different strategy on the next pass.
-            self.context.update_scratchpad(
-                hypothesis="Previous approach repeated the same failure. "
-                           "Try a different file/approach next attempt."
-            )
+        last_observation = verification.failing_tests or verification.stderr[:100]
+        self.context.update_scratchpad(
+            attempt=f"test failed: {last_observation}"
+        )
+
+        # Build prompt using PromptBuilder to inform Foundation Model
+        next_prompt = self.prompt_builder.build_turn_prompt(
+            issue=self.context.get_scratchpad().hypothesis,
+            scratchpad_state=self.context.get_scratchpad(),
+            last_observation=str(last_observation),
+            recovery_hint=advice.hint
+        )
+
+        if advice.decision == RecoveryDecision.FORCE_EXPLORE:
+            self.context.update_scratchpad(hypothesis=advice.hint)
             self.state = State.EXPLORING
-        else:
-            # New information (a different failure) -> just try again with it.
+        elif advice.decision == RecoveryDecision.RETRY_EDIT:
             self.state = State.EDITING
+        else:
+            self.state = State.ESCALATE
 
     def _report(self, status: str) -> dict:
         return {
             "status": status,
             "attempts": self.attempts,
-            "last_error": self.last_error,
+            "last_error": self.recovery_manager.last_error_signature,
             "scratchpad": self.context.get_scratchpad(),
         }
 
