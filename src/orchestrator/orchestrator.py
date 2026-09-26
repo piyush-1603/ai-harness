@@ -15,6 +15,21 @@ from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Optional
 
+from pydantic import BaseModel
+
+class OrchestratorConfig(BaseModel):
+    step_limit: int = 8
+    cost_limit: float = 3.0
+    system_template: str = ""
+    instance_template: str = ""
+
+try:
+    from orchestrator.recovery import RecoveryManager, RecoveryDecision
+    from orchestrator.prompting import PromptBuilder
+except ImportError:
+    from recovery import RecoveryManager, RecoveryDecision  # type: ignore
+    from prompting import PromptBuilder  # type: ignore
+
 
 # ---------------------------------------------------------------------------
 # Shared interface contract (Section 7 of the PRD). Agree on this with
@@ -52,31 +67,41 @@ class State(Enum):
     EDITING = auto()
     TESTING = auto()
     DONE = auto()
-    RETRY = auto()
     ESCALATE = auto()   # blocked — report and stop, don't loop forever
 
 
 class Orchestrator:
-    def __init__(self, context, tools, max_attempts: int = 8):
+    def __init__(self, context, tools, config: OrchestratorConfig = None):
         """
         context: object implementing get_scratchpad() / update_scratchpad()
         tools:   object implementing explore(), edit(), verify()
-        max_attempts: hard step cap before we give up and escalate
+        config:  OrchestratorConfig holding step_limit, cost_limit, templates
         """
         self.context = context
         self.tools = tools
-        self.max_attempts = max_attempts
+        self.config = config or OrchestratorConfig()
         self.state = State.EXPLORING
-        self.attempts = 0
-        self.last_error: Optional[str] = None
-        self.consecutive_same_error = 0
+        
+        # Track limits
+        self.n_calls = 0
+        self.cost = 0.0
+        
+        self.recovery_manager = RecoveryManager()
+        kwargs = {}
+        if self.config.system_template:
+            kwargs['system_template'] = self.config.system_template
+        if self.config.instance_template:
+            kwargs['instance_template'] = self.config.instance_template
+        self.prompt_builder = PromptBuilder(**kwargs)
 
     def run(self, issue: str) -> dict:
         """Drive the loop for one issue. Returns a final report dict."""
         self.context.update_scratchpad(hypothesis=f"Investigating: {issue}")
 
-        while self.attempts < self.max_attempts:
-            self.attempts += 1
+        while self.n_calls < self.config.step_limit and self.cost < self.config.cost_limit:
+            self.n_calls += 1
+            # In a real setup, self.cost would increment based on tool/model usage
+            self.cost += 0.05  # Plausible cost estimate for demo until real model is wired
 
             if self.state == State.EXPLORING:
                 self._explore(issue)
@@ -116,40 +141,40 @@ class Orchestrator:
 
         if verification.passed:
             self.state = State.DONE
-            self.last_error = None
-            self.consecutive_same_error = 0
+            self.recovery_manager.reset()
             return
 
-        # Failed — this is the recovery decision point.
-        error_signature = ",".join(sorted(verification.failing_tests)) or verification.stderr[:100]
-
-        if error_signature == self.last_error:
-            self.consecutive_same_error += 1
-        else:
-            self.consecutive_same_error = 1
-        self.last_error = error_signature
-
-        self.context.update_scratchpad(
-            attempt=f"test failed: {verification.failing_tests or verification.stderr[:200]}"
+        # Failed — delegate to distinct recovery layer
+        advice = self.recovery_manager.analyze_failure(
+            verification.failing_tests, verification.stderr
         )
 
-        if self.consecutive_same_error >= 2:
-            # Same failure twice in a row -> don't retry blindly, force a
-            # different strategy on the next pass.
-            self.context.update_scratchpad(
-                hypothesis="Previous approach repeated the same failure. "
-                           "Try a different file/approach next attempt."
-            )
+        last_observation = verification.failing_tests or verification.stderr[:100]
+        self.context.update_scratchpad(
+            attempt=f"test failed: {last_observation}"
+        )
+
+        # Build prompt using PromptBuilder to inform Foundation Model
+        next_prompt = self.prompt_builder.build_turn_prompt(
+            issue=self.context.get_scratchpad().hypothesis,
+            scratchpad_state=self.context.get_scratchpad(),
+            last_observation=str(last_observation),
+            recovery_hint=advice.hint
+        )
+
+        if advice.decision == RecoveryDecision.FORCE_EXPLORE:
+            self.context.update_scratchpad(hypothesis=advice.hint)
             self.state = State.EXPLORING
-        else:
-            # New information (a different failure) -> just try again with it.
+        elif advice.decision == RecoveryDecision.RETRY_EDIT:
             self.state = State.EDITING
+        else:
+            self.state = State.ESCALATE
 
     def _report(self, status: str) -> dict:
         return {
             "status": status,
-            "attempts": self.attempts,
-            "last_error": self.last_error,
+            "n_calls": self.n_calls, "cost": self.cost,
+            "last_error": self.recovery_manager.last_error_signature,
             "scratchpad": self.context.get_scratchpad(),
         }
 
