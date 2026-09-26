@@ -71,6 +71,7 @@ logger = logging.getLogger(__name__)
 class OrchestratorConfig(BaseModel):
     step_limit: int = 8
     cost_limit: float = 3.0
+    max_recoveries: int = 5
     system_template: str = ""
     instance_template: str = ""
 
@@ -116,6 +117,7 @@ class Orchestrator:
         model_adapter=None,
         memory_manager=None,
         context_builder=None,
+        recovery_manager=None,
         config: OrchestratorConfig = None,
     ):
         """
@@ -164,7 +166,7 @@ class Orchestrator:
         self.n_calls = 0
         self.cost = 0.0
         self.last_error: Optional[str] = None
-        self.recovery_manager = RecoveryManager()
+        self.recovery_manager = recovery_manager or RecoveryManager()
 
         kwargs = {}
         if self.config.system_template:
@@ -206,8 +208,19 @@ class Orchestrator:
 
         step_count = 0
         max_steps = self.config.step_limit
+        max_recoveries = getattr(self.config, "max_recoveries", 5)
+        if "HARNESS_MAX_RECOVERIES" in os.environ:
+            try:
+                max_recoveries = int(os.environ["HARNESS_MAX_RECOVERIES"])
+            except ValueError:
+                pass
+        recovery_count = 0
+
         last_tool_call: Optional[ToolCall] = None
         last_tool_result: Optional[ToolResult] = None
+        last_verification_failure: Optional[dict[str, Any]] = None
+        latest_verification_report: Optional[VerificationReport] = None
+        latest_verification_error: Optional[str] = None
         start_time = time.perf_counter()
 
         tool_call_counts: Dict[str, int] = {}
@@ -233,12 +246,36 @@ class Orchestrator:
                 context_text=budget_result.text,
                 last_tool_call=last_tool_call,
                 last_tool_result=last_tool_result,
+                recovery_hint=last_verification_failure.get("recovery_hint") if last_verification_failure else None,
+                verification_failure=last_verification_failure,
             )
 
             # 2. Query model and parse decision
             try:
                 decision = self.model_adapter.decide(turn_prompt)
             except ModelAPIError as e:
+                # If mock responses are exhausted during recovery, terminate cleanly as failed
+                if (
+                    latest_verification_report is not None
+                    and not latest_verification_report.is_verified
+                    and "Mock responses exhausted" in str(e)
+                ):
+                    return self._make_report(
+                        status="failed",
+                        step_count=step_count,
+                        task_spec=task_spec,
+                        last_error=self.last_error,
+                        verified=False,
+                        verification_report=latest_verification_report,
+                        verification_error=latest_verification_error,
+                        start_time=start_time,
+                        tool_call_counts=tool_call_counts,
+                        files_inspected=files_inspected,
+                        files_modified=files_modified,
+                        prompt_tokens=prompt_tokens_accum,
+                        completion_tokens=completion_tokens_accum,
+                        recovery_attempts=recovery_count,
+                    )
                 self.last_error = str(e)
                 self.memory_manager.record_observation(
                     Observation(
@@ -258,6 +295,7 @@ class Orchestrator:
                     files_modified=files_modified,
                     prompt_tokens=prompt_tokens_accum,
                     completion_tokens=completion_tokens_accum,
+                    recovery_attempts=recovery_count,
                 )
             except ModelParseError as e:
                 self.last_error = str(e)
@@ -298,7 +336,7 @@ class Orchestrator:
                 )
                 self.memory_manager.set_phase(Phase.VERIFY)
 
-                # Slice 4: Independent verification before declaring task completion
+                # Independent verification before declaring task completion
                 verification_report: Optional[VerificationReport] = None
                 verification_error: Optional[str] = None
                 try:
@@ -324,6 +362,8 @@ class Orchestrator:
                     )
 
                 is_verified = bool(verification_report and verification_report.is_verified)
+                latest_verification_report = verification_report
+                latest_verification_error = verification_error
 
                 # Record verification into MemoryManager via typed adapters
                 if verification_report is not None:
@@ -345,15 +385,6 @@ class Orchestrator:
                                 files=verification_report.files_modified,
                             )
                         )
-                        failing_items = (
-                            [verification_report.failure_classification.value]
-                            if verification_report.failure_classification
-                            else []
-                        )
-                        self.recovery_manager.analyze_failure(
-                            failing_items,
-                            verification_report.test_output or verification_report.summary,
-                        )
                     else:
                         self.memory_manager.record_observation(
                             Observation(
@@ -366,29 +397,106 @@ class Orchestrator:
                         )
 
                 if is_verified:
-                    final_status = "completed"
                     self.memory_manager.set_current_errors([])
                     self.memory_manager.set_status(TaskStatus.DONE)
-                else:
-                    final_status = "failed"
-                    self.memory_manager.set_phase(Phase.RECOVER)
+                    last_verification_failure = None
+                    return self._make_report(
+                        status="completed",
+                        step_count=step_count,
+                        task_spec=task_spec,
+                        completion_message=decision.message,
+                        last_error=self.last_error,
+                        verified=True,
+                        verification_report=verification_report,
+                        verification_error=verification_error,
+                        start_time=start_time,
+                        tool_call_counts=tool_call_counts,
+                        files_inspected=files_inspected,
+                        files_modified=files_modified,
+                        prompt_tokens=prompt_tokens_accum,
+                        completion_tokens=completion_tokens_accum,
+                        recovery_attempts=recovery_count,
+                    )
 
-                return self._make_report(
-                    status=final_status,
-                    step_count=step_count,
-                    task_spec=task_spec,
-                    completion_message=decision.message,
-                    last_error=self.last_error,
-                    verified=is_verified,
-                    verification_report=verification_report,
-                    verification_error=verification_error,
-                    start_time=start_time,
-                    tool_call_counts=tool_call_counts,
-                    files_inspected=files_inspected,
-                    files_modified=files_modified,
-                    prompt_tokens=prompt_tokens_accum,
-                    completion_tokens=completion_tokens_accum,
+                # Verification failed -> Recovery analysis
+                self.memory_manager.set_phase(Phase.RECOVER)
+
+                failing_items = getattr(verification_report, "failing_tests", [])
+                raw_error = (
+                    (verification_report.test_output or verification_report.summary)
+                    if verification_report
+                    else (verification_error or "Verification failed")
                 )
+                advice = self.recovery_manager.analyze_failure(failing_items, raw_error)
+
+                # Check escalation or recovery bounds
+                if advice.decision == RecoveryDecision.ESCALATE or recovery_count >= max_recoveries:
+                    return self._make_report(
+                        status="failed",
+                        step_count=step_count,
+                        task_spec=task_spec,
+                        completion_message=decision.message,
+                        last_error=self.last_error or (
+                            f"Recovery escalated: {advice.hint}"
+                            if advice.decision == RecoveryDecision.ESCALATE
+                            else f"Exhausted maximum recovery attempts ({max_recoveries})"
+                        ),
+                        verified=False,
+                        verification_report=verification_report,
+                        verification_error=verification_error,
+                        start_time=start_time,
+                        tool_call_counts=tool_call_counts,
+                        files_inspected=files_inspected,
+                        files_modified=files_modified,
+                        prompt_tokens=prompt_tokens_accum,
+                        completion_tokens=completion_tokens_accum,
+                        recovery_attempts=recovery_count,
+                    )
+
+                # Recovery allowed: RETRY_EDIT or FORCE_EXPLORE
+                recovery_count += 1
+                self.memory_manager.record_attempt(
+                    Attempt(
+                        id=f"recovery_{recovery_count}",
+                        action=f"verification_recovery({advice.decision.name}): {advice.hint}",
+                        success=False,
+                        result=verification_report.summary if verification_report else (verification_error or "Verification failed"),
+                        files_touched=list(verification_report.files_modified if verification_report else []),
+                        iteration=step_count,
+                    )
+                )
+                if hasattr(self.context, "update_scratchpad"):
+                    self.context.update_scratchpad(
+                        attempt=f"verification failed: {verification_report.summary if verification_report else (verification_error or 'failed')}",
+                        hypothesis=advice.hint if advice.decision == RecoveryDecision.FORCE_EXPLORE else None,
+                    )
+
+                v_status = (
+                    verification_report.status.value
+                    if verification_report and hasattr(verification_report.status, "value")
+                    else (str(verification_report.status) if verification_report else "FAILED")
+                )
+                f_class = (
+                    verification_report.failure_classification.value
+                    if verification_report and verification_report.failure_classification
+                    else "UNKNOWN"
+                )
+                t_cmd = verification_report.test_command if verification_report else (task_spec.test_command or "")
+                t_out = verification_report.test_output if verification_report else (verification_error or "")
+                v_sum = verification_report.summary if verification_report else (verification_error or "Verification failed")
+
+                last_verification_failure = {
+                    "status": v_status,
+                    "failure_classification": f_class,
+                    "test_command": t_cmd,
+                    "test_output": t_out,
+                    "summary": v_sum,
+                    "recovery_hint": advice.hint,
+                    "decision": advice.decision.name,
+                }
+                last_tool_call = None
+                last_tool_result = None
+                continue
 
             elif isinstance(decision, ToolCall):
                 self.memory_manager.set_phase(Phase.EXECUTE)
@@ -463,12 +571,15 @@ class Orchestrator:
             task_spec=task_spec,
             last_error=self.last_error or "Exceeded HARNESS_MAX_STEPS limit",
             verified=False,
+            verification_report=latest_verification_report,
+            verification_error=latest_verification_error,
             start_time=start_time,
             tool_call_counts=tool_call_counts,
             files_inspected=files_inspected,
             files_modified=files_modified,
             prompt_tokens=prompt_tokens_accum,
             completion_tokens=completion_tokens_accum,
+            recovery_attempts=recovery_count,
         )
 
     def _build_turn_prompt(
@@ -479,6 +590,7 @@ class Orchestrator:
         last_tool_call: Optional[ToolCall] = None,
         last_tool_result: Optional[ToolResult] = None,
         recovery_hint: Optional[str] = None,
+        verification_failure: Optional[dict[str, Any]] = None,
     ) -> str:
         ctx_str = context_text if context_text is not None else (context_bundle.render_text() if context_bundle is not None else "")
         prompt_parts: list[str] = [
@@ -516,11 +628,34 @@ class Orchestrator:
                 f"Output:\n{last_tool_result.output if last_tool_result.success else (last_tool_result.error or last_tool_result.output or 'Tool failed without error output')}",
             ])
 
-        if recovery_hint:
+        if verification_failure:
+            v_status = verification_failure.get("status", "FAILED")
+            f_class = verification_failure.get("failure_classification", "UNKNOWN")
+            t_cmd = verification_failure.get("test_command", "")
+            t_out = (verification_failure.get("test_output") or "").strip()
+            v_sum = verification_failure.get("summary", "")
+
+            v_lines = [
+                "",
+                "## VERIFICATION FAILURE",
+                f"Verification Status: {v_status}",
+                f"Failure Classification: {f_class}",
+                f"Test Command: {t_cmd}",
+                f"Verification Summary: {v_sum}",
+            ]
+            if t_out:
+                v_lines.extend([
+                    "Test Output:",
+                    t_out[:2000] if len(t_out) > 2000 else t_out,
+                ])
+            prompt_parts.extend(v_lines)
+
+        hint = recovery_hint or (verification_failure.get("recovery_hint") if verification_failure else None)
+        if hint:
             prompt_parts.extend([
                 "",
                 "## RECOVERY HINT",
-                recovery_hint,
+                hint,
             ])
 
         prompt_parts.extend([
@@ -574,6 +709,7 @@ class Orchestrator:
         files_modified: Optional[List[str]] = None,
         prompt_tokens: int = 0,
         completion_tokens: int = 0,
+        recovery_attempts: int = 0,
     ) -> dict:
         wall_time = time.perf_counter() - start_time if start_time > 0 else 0.0
         if hasattr(self.context, "get_scratchpad"):
@@ -591,6 +727,8 @@ class Orchestrator:
                 if f not in merged_files_modified:
                     merged_files_modified.append(f)
 
+        effective_recovery_attempts = recovery_attempts or len(getattr(sp, "history_attempts", []))
+
         telemetry = TelemetryReport(
             total_model_calls=step_count,
             prompt_tokens=prompt_tokens,
@@ -600,7 +738,7 @@ class Orchestrator:
             tool_call_counts=dict(tool_call_counts or {}),
             files_inspected=list(files_inspected or []),
             files_modified=merged_files_modified,
-            recovery_attempts=len(getattr(sp, "history_attempts", [])),
+            recovery_attempts=effective_recovery_attempts,
             total_wall_time_sec=wall_time,
         )
 
@@ -622,6 +760,8 @@ class Orchestrator:
                 if verification_report and verification_report.failure_classification
                 else None
             ),
+            "files_modified": merged_files_modified,
+            "recovery_attempts": effective_recovery_attempts,
             "scratchpad": sp,
             "telemetry": telemetry,
         }
