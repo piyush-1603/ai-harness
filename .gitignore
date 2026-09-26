@@ -1,4 +1,6 @@
 # AI Harness & Evaluation Artifacts
+.harness/
+.harness_state/
 patch.txt
 *.patch
 exit_statuses*.yaml
@@ -209,4 +211,3 @@ poetry.toml
 pyrightconfig.json
 
 # End of https://www.toptal.com/developers/gitignore/api/python
-
