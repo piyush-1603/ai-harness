@@ -1,8 +1,5 @@
-"""Context building and repository scanning subsystem."""
+"""Alias module re-exporting RepositoryScanner, RepositoryIndex, and ScannerConfig."""
 
-from src.context.builder import ContextBuilder
-from src.context.bundle import ContextBundle
-from src.context.config import ContextConfig
 from src.context.scanner import (
     DEFAULT_BINARY_EXTENSIONS,
     DEFAULT_IGNORE_DIRS,
@@ -16,9 +13,6 @@ from src.context.scanner import (
 )
 
 __all__ = [
-    "ContextBuilder",
-    "ContextBundle",
-    "ContextConfig",
     "RepositoryScanner",
     "RepositoryIndex",
     "ScannerConfig",
