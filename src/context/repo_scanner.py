@@ -1,4 +1,4 @@
-"""Alias module re-exporting RepositoryScanner, RepositoryIndex, ScannerConfig, and FileRole."""
+"""Alias module re-exporting RepositoryScanner, RepositoryIndex, ScannerConfig, and symbols."""
 
 from src.context.scanner import (
     DEFAULT_BINARY_EXTENSIONS,
@@ -15,12 +15,15 @@ from src.context.scanner import (
     is_important_file,
     is_test_file,
 )
+from src.context.symbols import FileSymbols, SymbolRecord
 
 __all__ = [
     "RepositoryScanner",
     "RepositoryIndex",
     "ScannerConfig",
     "FileRole",
+    "FileSymbols",
+    "SymbolRecord",
     "classify_file_role",
     "is_documentation_file",
     "is_config_file",

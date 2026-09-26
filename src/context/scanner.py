@@ -10,6 +10,13 @@ import os
 from pathlib import Path
 from typing import Any, Optional, Union
 
+from src.context.symbols import (
+    FileSymbols,
+    SymbolRecord,
+    extract_file_symbols,
+    format_file_symbols,
+)
+
 
 # ---------------------------------------------------------------------------
 # File Roles
@@ -559,6 +566,9 @@ class ScannerConfig:
     max_file_size: int = 500 * 1024  # 500 KB default
     max_scanned_files: int = 2000
     binary_extensions: set[str] = field(default_factory=lambda: set(DEFAULT_BINARY_EXTENSIONS))
+    max_symbols_per_file: int = 100
+    max_total_symbols: int = 2000
+    extract_symbols: bool = True
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -567,6 +577,9 @@ class ScannerConfig:
             "max_file_size": self.max_file_size,
             "max_scanned_files": self.max_scanned_files,
             "binary_extensions": sorted(list(self.binary_extensions)),
+            "max_symbols_per_file": self.max_symbols_per_file,
+            "max_total_symbols": self.max_total_symbols,
+            "extract_symbols": self.extract_symbols,
         }
 
     @classmethod
@@ -577,6 +590,9 @@ class ScannerConfig:
             max_file_size=int(data.get("max_file_size", 500 * 1024)),
             max_scanned_files=int(data.get("max_scanned_files", 2000)),
             binary_extensions=set(data.get("binary_extensions", DEFAULT_BINARY_EXTENSIONS)),
+            max_symbols_per_file=int(data.get("max_symbols_per_file", 100)),
+            max_total_symbols=int(data.get("max_total_symbols", 2000)),
+            extract_symbols=bool(data.get("extract_symbols", True)),
         )
 
 
@@ -584,7 +600,7 @@ class ScannerConfig:
 class RepositoryIndex:
     """
     Structured, lightweight representation of a scanned repository.
-    Deterministic and serializable.
+    Deterministic, serializable, and enriched with lightweight symbol intelligence.
     """
     root_dir: str
     discovered_files: list[str] = field(default_factory=list)
@@ -599,6 +615,7 @@ class RepositoryIndex:
     source_directories: list[str] = field(default_factory=list)
     documentation_files: list[str] = field(default_factory=list)
     file_roles: dict[str, str] = field(default_factory=dict)
+    file_symbols: dict[str, FileSymbols] = field(default_factory=dict)
 
     # -------------------------------------------------------------------------
     # Convenience Property Aliases
@@ -628,6 +645,14 @@ class RepositoryIndex:
     def extensions(self) -> dict[str, int]:
         return self.detected_extensions
 
+    @property
+    def symbols_by_file(self) -> dict[str, FileSymbols]:
+        return self.file_symbols
+
+    @property
+    def total_symbols(self) -> int:
+        return sum(len(fs.symbols) for fs in self.file_symbols.values())
+
     def get_file_role(self, rel_path: str) -> FileRole:
         """Get the primary FileRole for a relative path."""
         val = self.file_roles.get(rel_path)
@@ -655,6 +680,7 @@ class RepositoryIndex:
             "source_directories": list(self.source_directories),
             "documentation_files": list(self.documentation_files),
             "file_roles": dict(self.file_roles),
+            "file_symbols": {k: v.to_dict() for k, v in self.file_symbols.items()},
         }
 
     def to_json(self, indent: int = 2) -> str:
@@ -662,6 +688,9 @@ class RepositoryIndex:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> RepositoryIndex:
+        raw_symbols = data.get("file_symbols", {})
+        parsed_symbols = {k: FileSymbols.from_dict(v) for k, v in raw_symbols.items()}
+
         return cls(
             root_dir=data.get("root_dir", data.get("repository_root", "")),
             discovered_files=list(data.get("discovered_files", [])),
@@ -678,16 +707,42 @@ class RepositoryIndex:
             source_directories=list(data.get("source_directories", [])),
             documentation_files=list(data.get("documentation_files", [])),
             file_roles=dict(data.get("file_roles", {})),
+            file_symbols=parsed_symbols,
         )
 
     # -------------------------------------------------------------------------
     # Text Rendering
     # -------------------------------------------------------------------------
 
-    def render_text(self, max_sample_files: int = 15) -> str:
+    def render_symbols(self, max_files: int = 15) -> str:
+        """
+        Produce a compact text rendering of discovered symbols and imports.
+        """
+        if not self.file_symbols:
+            return "## SYMBOLS & IMPORTS\n(None)"
+
+        lines: list[str] = ["## SYMBOLS & IMPORTS"]
+        sorted_files = sorted(self.file_symbols.keys())
+        sample = sorted_files[:max_files]
+        for f in sample:
+            fs = self.file_symbols[f]
+            lines.extend(format_file_symbols(fs))
+
+        if len(sorted_files) > max_files:
+            lines.append(f"... and {len(sorted_files) - max_files} more files with symbols")
+
+        return "\n".join(lines)
+
+    def render_text(
+        self,
+        max_sample_files: int = 15,
+        include_symbols: bool = False,
+        max_symbol_files: int = 10,
+    ) -> str:
         """
         Produce a compact, deterministic text overview of the repository.
         Keeps source, test, documentation, and config output clearly separated.
+        Optionally appends a compact symbol and import breakdown.
         """
         sections: list[str] = []
 
@@ -764,6 +819,10 @@ class RepositoryIndex:
         else:
             sections.append("## TEST SUITE\n(None)")
 
+        # 7. Optional Symbols Section
+        if include_symbols:
+            sections.append(self.render_symbols(max_files=max_symbol_files))
+
         return "\n\n".join(sections)
 
     def to_text(self) -> str:
@@ -781,7 +840,8 @@ class RepositoryIndex:
 class RepositoryScanner:
     """
     Recursively scans a repository filesystem and produces a structured RepositoryIndex.
-    Guarantees deterministic ordering, strict filtering, and explicit file-role classification.
+    Guarantees deterministic ordering, strict filtering, explicit file-role classification,
+    and deterministic symbol and import extraction.
     """
 
     def __init__(self, config: Optional[ScannerConfig] = None) -> None:
@@ -814,6 +874,9 @@ class RepositoryScanner:
         source_directories: list[str] = []
         documentation_files: list[str] = []
         file_roles: dict[str, str] = {}
+        file_symbols: dict[str, FileSymbols] = {}
+
+        total_symbols_extracted = 0
 
         # Recursively traverse directory tree deterministically
         for dirpath, dirnames, filenames in os.walk(str(root_path)):
@@ -874,15 +937,18 @@ class RepositoryScanner:
                 discovered_files.append(rel_file)
 
                 # Extension & Language Detection
+                file_lang = ""
                 ext = full_file_path.suffix.lower()
                 if ext:
                     detected_extensions[ext] = detected_extensions.get(ext, 0) + 1
-                    lang = EXTENSION_TO_LANGUAGE.get(ext)
-                    if lang:
-                        detected_languages[lang] = detected_languages.get(lang, 0) + 1
+                    file_lang = EXTENSION_TO_LANGUAGE.get(ext, "")
+                    if file_lang:
+                        detected_languages[file_lang] = detected_languages.get(file_lang, 0) + 1
                 elif filename.lower() == "dockerfile":
+                    file_lang = "Dockerfile"
                     detected_languages["Dockerfile"] = detected_languages.get("Dockerfile", 0) + 1
                 elif filename.lower() == "makefile":
+                    file_lang = "Makefile"
                     detected_languages["Makefile"] = detected_languages.get("Makefile", 0) + 1
 
                 # Important file detection (root config / manifests / docs)
@@ -899,6 +965,29 @@ class RepositoryScanner:
                     documentation_files.append(rel_file)
                 elif role == FileRole.SOURCE:
                     source_files.append(rel_file)
+
+                # Symbol and Import Intelligence extraction (Phase B3.2)
+                # Only extract for SOURCE and TEST files
+                if (
+                    cfg.extract_symbols
+                    and role in (FileRole.SOURCE, FileRole.TEST)
+                    and total_symbols_extracted < cfg.max_total_symbols
+                ):
+                    remaining_budget = cfg.max_total_symbols - total_symbols_extracted
+                    file_symbol_limit = min(cfg.max_symbols_per_file, remaining_budget)
+                    try:
+                        fs = extract_file_symbols(
+                            file_path=full_file_path,
+                            rel_path=rel_file,
+                            language=file_lang,
+                            max_symbols=file_symbol_limit,
+                        )
+                        if fs is not None and (fs.symbols or fs.imports):
+                            file_symbols[rel_file] = fs
+                            total_symbols_extracted += len(fs.symbols)
+                    except Exception:
+                        # Malformed or unsupported file must never abort indexing
+                        pass
 
             if len(discovered_files) >= cfg.max_scanned_files:
                 break
@@ -927,4 +1016,5 @@ class RepositoryScanner:
             source_directories=source_directories,
             documentation_files=documentation_files,
             file_roles=dict(sorted(file_roles.items())),
+            file_symbols=dict(sorted(file_symbols.items())),
         )
