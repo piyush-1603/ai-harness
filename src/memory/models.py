@@ -56,6 +56,7 @@ class EventType(str, Enum):
     OBSERVATION_ADDED = "OBSERVATION_ADDED"
     ATTEMPT_RECORDED = "ATTEMPT_RECORDED"
     FAILURE_RECORDED = "FAILURE_RECORDED"
+    FAILURE_RESOLVED = "FAILURE_RESOLVED"
     ERRORS_UPDATED = "ERRORS_UPDATED"
     VERIFICATION_UPDATED = "VERIFICATION_UPDATED"
     ITERATION_INCREMENTED = "ITERATION_INCREMENTED"
@@ -154,12 +155,17 @@ class Failure:
     occurrence_count: int = 1
     first_seen: str = field(default_factory=now_iso)
     last_seen: str = field(default_factory=now_iso)
+    resolved: bool = False
+    resolved_at: Optional[str] = None
 
     def __post_init__(self) -> None:
         self.first_seen = _format_timestamp(self.first_seen)
         self.last_seen = _format_timestamp(self.last_seen)
+        if self.resolved_at:
+            self.resolved_at = _format_timestamp(self.resolved_at)
         if not isinstance(self.files, list):
             self.files = list(self.files)
+        self.resolved = bool(self.resolved)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -170,6 +176,8 @@ class Failure:
             "occurrence_count": self.occurrence_count,
             "first_seen": self.first_seen,
             "last_seen": self.last_seen,
+            "resolved": self.resolved,
+            "resolved_at": self.resolved_at,
         }
 
     @classmethod
@@ -183,6 +191,8 @@ class Failure:
             occurrence_count=int(data.get("occurrence_count", 1)),
             first_seen=first,
             last_seen=data.get("last_seen", first),
+            resolved=bool(data.get("resolved", False)),
+            resolved_at=data.get("resolved_at"),
         )
 
 

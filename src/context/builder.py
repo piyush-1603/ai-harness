@@ -192,8 +192,16 @@ class ContextBuilder:
         else:
             recent_attempts = []
 
-        # 5. Repeated Failures (occurrence_count >= min_failure_occurrences)
+        # 5. Repeated Failures (occurrence_count >= min_failure_occurrences, active preferred)
         if cfg.include_repeated_failures:
+            filtered_failures = [
+                f for f in state.failures
+                if f.occurrence_count >= cfg.min_failure_occurrences
+            ]
+            sorted_failures = sorted(
+                filtered_failures,
+                key=lambda f: (1 if getattr(f, "resolved", False) else 0)
+            )
             repeated_failures = [
                 Failure(
                     error_signature=f.error_signature,
@@ -203,9 +211,10 @@ class ContextBuilder:
                     occurrence_count=f.occurrence_count,
                     first_seen=f.first_seen,
                     last_seen=f.last_seen,
+                    resolved=getattr(f, "resolved", False),
+                    resolved_at=getattr(f, "resolved_at", None),
                 )
-                for f in state.failures
-                if f.occurrence_count >= cfg.min_failure_occurrences
+                for f in sorted_failures
             ]
         else:
             repeated_failures = []

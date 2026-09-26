@@ -284,7 +284,8 @@ class ContextBundle:
             if self.repeated_failures:
                 fail_lines: list[str] = []
                 for f in self.repeated_failures:
-                    fail_lines.append(f"- [x{f.occurrence_count}] {f.error_signature}: {f.summary}")
+                    status_suffix = " (resolved)" if getattr(f, "resolved", False) else ""
+                    fail_lines.append(f"- [x{f.occurrence_count}] {f.error_signature}: {f.summary}{status_suffix}")
                 sections.append("## REPEATED FAILURES\n" + "\n".join(fail_lines))
             else:
                 sections.append("## REPEATED FAILURES\n(None)")

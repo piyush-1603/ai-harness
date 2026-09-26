@@ -319,6 +319,12 @@ class MemoryManager:
 
         now = now_iso()
         if existing is not None:
+            reopened = False
+            if existing.resolved:
+                existing.resolved = False
+                existing.resolved_at = None
+                reopened = True
+
             existing.occurrence_count += 1
             existing.last_seen = failure.last_seen or now
             if failure.summary:
@@ -337,6 +343,7 @@ class MemoryManager:
                     "error_signature": existing.error_signature,
                     "occurrence_count": existing.occurrence_count,
                     "is_repeated": True,
+                    "reopened": reopened,
                 },
             )
             return existing
@@ -365,6 +372,56 @@ class MemoryManager:
     def record_failure(self, failure: Union[Failure, dict[str, Any]]) -> Failure:
         """Alias for add_failure."""
         return self.add_failure(failure)
+
+    def resolve_failure(self, error_signature: str) -> bool:
+        """
+        Mark an active failure as resolved without deleting it from historical memory.
+        Returns True if an unresolved failure was found and marked resolved, False otherwise.
+        """
+        state = self.get_state()
+        failure = next(
+            (f for f in state.failures if f.error_signature == error_signature and not f.resolved),
+            None,
+        )
+        if failure is None:
+            return False
+
+        now = now_iso()
+        failure.resolved = True
+        failure.resolved_at = now
+        state.updated_at = now
+        self._record_event(
+            EventType.FAILURE_RESOLVED,
+            summary=f"Failure resolved: {failure.error_signature}",
+            metadata={"error_signature": failure.error_signature, "resolved_at": failure.resolved_at},
+        )
+        return True
+
+    def resolve_all_failures(self) -> int:
+        """
+        Mark all currently active (unresolved) failures as resolved.
+        Returns the number of failures resolved.
+        """
+        state = self.get_state()
+        unresolved = [f for f in state.failures if not f.resolved]
+        if not unresolved:
+            return 0
+
+        now = now_iso()
+        for f in unresolved:
+            f.resolved = True
+            f.resolved_at = now
+
+        state.updated_at = now
+        self._record_event(
+            EventType.FAILURE_RESOLVED,
+            summary=f"All active failures resolved ({len(unresolved)} failures)",
+            metadata={
+                "count": len(unresolved),
+                "signatures": [f.error_signature for f in unresolved],
+            },
+        )
+        return len(unresolved)
 
     def get_repeated_failures(self, min_occurrences: int = 2) -> list[Failure]:
         """
@@ -406,6 +463,8 @@ class MemoryManager:
                 "summary": result.summary if result else "",
             },
         )
+        if result is not None and result.success:
+            self.resolve_all_failures()
         return result
 
     # -------------------------------------------------------------------------

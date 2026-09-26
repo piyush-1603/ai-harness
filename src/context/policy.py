@@ -282,9 +282,9 @@ class AdaptiveContextPolicy:
             score += cfg.active_error_weight
             reasons.append(f"active errors present (+{cfg.active_error_weight})")
 
-        # 4. Repeated failures and strongly repeated occurrences
+        # 4. Repeated failures and strongly repeated occurrences (active/unresolved only)
         for failure in state.failures:
-            if failure.occurrence_count >= 2:
+            if not getattr(failure, "resolved", False) and failure.occurrence_count >= 2:
                 points = cfg.repeated_failure_weight
                 if failure.occurrence_count >= cfg.strongly_repeated_threshold:
                     points += cfg.strongly_repeated_bonus
