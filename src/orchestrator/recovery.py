@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from enum import Enum, auto
-from typing import Optional
+import hashlib
 
 class RecoveryDecision(Enum):
     RETRY_EDIT = auto()
@@ -16,25 +16,39 @@ class RecoveryManager:
     """
     Tracks error history, classifies failure, and picks next strategy.
     """
-    def __init__(self, max_consecutive_same_error: int = 2):
-        self.max_consecutive = max_consecutive_same_error
-        self.last_error_signature: Optional[str] = None
-        self.consecutive_same_error = 0
+    def __init__(self, explore_threshold: int = 2, escalate_threshold: int = 4):
+        self.explore_threshold = explore_threshold
+        self.escalate_threshold = escalate_threshold
+        
+        self.signature_history: list[str] = []
+        self.stuck_counter = 0
 
     def analyze_failure(self, failing_tests: list, stderr: str) -> RecoveryAdvice:
-        error_signature = ",".join(sorted(failing_tests)) if failing_tests else stderr[:100]
-
-        if error_signature == self.last_error_signature:
-            self.consecutive_same_error += 1
+        raw_sig = ",".join(sorted(failing_tests)) if failing_tests else stderr[:100]
+        
+        # Empty signature edge case guard
+        if not raw_sig.strip():
+            error_signature = f"empty_{hashlib.md5(str(len(self.signature_history)).encode()).hexdigest()}"
         else:
-            self.consecutive_same_error = 1
-            
-        self.last_error_signature = error_signature
+            error_signature = raw_sig
 
-        if self.consecutive_same_error >= self.max_consecutive:
+        # Check for repeat within last 4 signatures
+        if error_signature in self.signature_history[-4:]:
+            self.stuck_counter += 1
+        else:
+            self.stuck_counter = 1
+            
+        self.signature_history.append(error_signature)
+
+        if self.stuck_counter >= self.escalate_threshold:
+            return RecoveryAdvice(
+                decision=RecoveryDecision.ESCALATE,
+                hint="Repeated failures detected despite forced exploration. Escalating."
+            )
+        elif self.stuck_counter >= self.explore_threshold:
             return RecoveryAdvice(
                 decision=RecoveryDecision.FORCE_EXPLORE,
-                hint="Previous approach repeated the same failure. Try a different file/approach next attempt."
+                hint="Previous approach repeated a failure recently. Try a different file/approach next attempt."
             )
         else:
             return RecoveryAdvice(
@@ -43,5 +57,9 @@ class RecoveryManager:
             )
             
     def reset(self):
-        self.last_error_signature = None
-        self.consecutive_same_error = 0
+        self.signature_history.clear()
+        self.stuck_counter = 0
+    
+    @property
+    def last_error_signature(self) -> str:
+        return self.signature_history[-1] if self.signature_history else None

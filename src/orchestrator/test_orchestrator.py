@@ -10,7 +10,7 @@ correct on its own, before Person B/C's real code exists.
 Run: python3 -m pytest test_orchestrator.py -v
 """
 
-from orchestrator import Orchestrator, StubContext, ToolResult, VerificationResult, State
+from orchestrator import Orchestrator, StubContext, ToolResult, VerificationResult, State, OrchestratorConfig
 
 
 # ---------------------------------------------------------------------------
@@ -93,12 +93,12 @@ def test_recovers_from_a_single_failure():
     report = orch.run("some issue")
     assert report["status"] == "resolved"
     # explore, edit, test(fail), edit, test(pass), detect-DONE = 6 attempts
-    assert report["attempts"] == 6
+    assert report["n_calls"] == 6
 
 
 def test_repeated_identical_failure_triggers_re_exploration():
     tools = RepeatedSameFailureTools()
-    orch = Orchestrator(context=StubContext(), tools=tools, max_attempts=6)
+    orch = Orchestrator(context=StubContext(), tools=tools, config=OrchestratorConfig(step_limit=6))
     report = orch.run("some issue")
     # Never passes -> should hit the step cap and escalate, not loop forever
     assert report["status"] == "blocked_step_cap"
@@ -109,10 +109,10 @@ def test_repeated_identical_failure_triggers_re_exploration():
 
 def test_step_cap_prevents_infinite_loop_on_varying_failures():
     tools = DifferentFailureEachTimeTools()
-    orch = Orchestrator(context=StubContext(), tools=tools, max_attempts=5)
+    orch = Orchestrator(context=StubContext(), tools=tools, config=OrchestratorConfig(step_limit=5))
     report = orch.run("some issue")
     assert report["status"] == "blocked_step_cap"
-    assert report["attempts"] == 5  # hit the cap exactly, didn't overrun
+    assert report["n_calls"] == 5  # hit the cap exactly, didn't overrun
 
 
 def test_report_always_includes_scratchpad_history():
