@@ -1,0 +1,161 @@
+/* Global */
+Screen {
+    background: #0f0f0f;
+    color: #e0e0e0;
+    align: center top;
+}
+
+#main-content {
+    max-width: 100;
+    width: 100%;
+    height: auto;
+    padding: 1 2;
+}
+
+/* Typography & General */
+.accent {
+    color: #4ea8de;
+}
+.muted {
+    color: #6c757d;
+}
+.success {
+    color: #52b788;
+}
+.warning {
+    color: #ffb703;
+}
+.error {
+    color: #e63946;
+}
+
+/* Common Components */
+.separator {
+    color: #2c2c2c;
+    height: 1;
+    margin: 1 0;
+}
+
+.header {
+    text-style: bold;
+    color: #ffffff;
+}
+
+.task-title {
+    text-style: bold;
+    color: #ffffff;
+}
+
+.box {
+    margin-bottom: 1;
+}
+
+/* Lifecycle Widget */
+LifecycleWidget {
+    height: 2;
+    margin-bottom: 1;
+}
+
+.lifecycle-phase {
+    color: #6c757d;
+    margin-right: 4;
+}
+
+.lifecycle-phase-active {
+    color: #4ea8de;
+    text-style: bold;
+}
+
+.lifecycle-marker-row {
+    color: #2c2c2c;
+}
+
+/* Navigation Widget */
+NavigationWidget {
+    dock: bottom;
+    height: 1;
+    color: #6c757d;
+}
+
+.nav-active {
+    color: #4ea8de;
+    text-style: bold;
+}
+
+/* Screen specific: Overview */
+OverviewScreen {
+    layout: vertical;
+}
+
+.title-bar {
+    layout: horizontal;
+    height: 1;
+    margin-bottom: 1;
+}
+.title-bar-left {
+    width: 1fr;
+    text-align: left;
+    text-style: bold;
+}
+.title-bar-right {
+    width: 1fr;
+    text-align: right;
+    color: #4ea8de;
+}
+
+/* Screen specific: Context */
+ContextScreen {
+    layout: vertical;
+}
+
+.context-grid {
+    layout: grid;
+    grid-size: 2;
+    grid-columns: 2fr 1fr;
+}
+
+.list-pane {
+    height: 100%;
+    padding-right: 2;
+}
+.detail-pane {
+    height: 100%;
+}
+
+/* Lists and Tables */
+ListView {
+    background: #0f0f0f;
+}
+
+ListItem {
+    padding: 0 1;
+}
+ListItem:focus {
+    background: #1e1e1e;
+}
+ListItem.--highlight {
+    background: #1e1e1e;
+    color: #ffffff;
+}
+
+/* Tree */
+Tree {
+    background: #0f0f0f;
+    padding: 0;
+}
+Tree:focus .tree--cursor {
+    background: #1e1e1e;
+    color: #ffffff;
+}
+Tree > .tree--guides {
+    color: #2c2c2c;
+}
+
+/* Events */
+EventsScreen {
+    layout: vertical;
+}
+RichLog {
+    background: #0f0f0f;
+    color: #e0e0e0;
+}
