@@ -300,7 +300,12 @@ class TestRealOrchestrationLoop(unittest.TestCase):
             
             mock_policy = MagicMock()
             mock_profile = MagicMock(spec=ContextProfile)
-            mock_policy.evaluate.return_value = mock_profile
+            
+            phases_seen = []
+            def evaluate_side_effect(manager, repo_index=None):
+                phases_seen.append(manager.get_state().phase)
+                return mock_profile
+            mock_policy.evaluate.side_effect = evaluate_side_effect
             
             mock_budgeter = MagicMock()
             mock_budget_result = ContextBudgetResult(
@@ -358,6 +363,8 @@ class TestRealOrchestrationLoop(unittest.TestCase):
             repeated = [f for f in state.failures if "First fail" in f.summary]
             self.assertTrue(len(repeated) >= 1)
             self.assertTrue(any(f.occurrence_count >= 2 for f in repeated))
+            
+            self.assertIn(Phase.RECOVER, phases_seen)
 
     def test_m_additional_requirements(self):
         """TEST M: targeted checks for specific I2 integrations"""

@@ -57,7 +57,6 @@ from src.memory.adapters import (
     verification_from_report,
     failure_from_verification_report,
 )
-from src.memory.adapters import observation_from_tool_result, attempt_from_tool_result
 from src.orchestrator.model_adapter import (
     ModelAdapter,
     ModelAPIError,
@@ -311,6 +310,9 @@ class Orchestrator:
                         self.memory_manager.set_current_errors([verification_report.failure_classification.value])
                     elif verification_report.summary:
                         self.memory_manager.set_current_errors([verification_report.summary])
+                    
+                    self.memory_manager.set_phase(Phase.RECOVER)
+                    
                     last_tool_call = ToolCall(call_id="verify", tool_name=ToolName.RUN_BASH, tool_args={"command": "verify"})
                     
                     # Bounded verification evidence (Point 4)
