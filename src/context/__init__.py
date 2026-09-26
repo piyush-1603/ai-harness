@@ -40,6 +40,13 @@ from src.context.symbols import (
     SymbolRecord,
     resolve_file_local_imports,
 )
+from src.context.diagnostics import (
+    CandidateDiagnostic,
+    PolicyDiagnostic,
+    BudgetDiagnostic,
+    ContextDiagnosticsReport,
+    ContextDiagnosticsEngine,
+)
 
 __all__ = [
     "ContextBuilder",
@@ -79,4 +86,9 @@ __all__ = [
     "is_binary_file",
     "is_important_file",
     "is_test_file",
+    "CandidateDiagnostic",
+    "PolicyDiagnostic",
+    "BudgetDiagnostic",
+    "ContextDiagnosticsReport",
+    "ContextDiagnosticsEngine",
 ]

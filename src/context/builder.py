@@ -79,13 +79,13 @@ class ContextBuilder:
         self.scorer = RelevanceScorer()
         self.packer = ContextPacker()
 
-    def build(
+    def build_with_report(
         self,
         state_or_manager: Union[TaskState, MemoryManager],
         config: Optional[ContextConfig] = None,
         repository_index: Optional[RepositoryIndex] = None,
         max_tokens: Optional[int] = None,
-    ) -> ContextBundle:
+    ) -> tuple[ContextBundle, ContextPackingReport]:
         from src.context.budget import estimate_tokens, DEFAULT_MAX_CONTEXT_TOKENS, DEFAULT_CHARS_PER_TOKEN
         if hasattr(state_or_manager, "get_state"):
             state = state_or_manager.get_state()
@@ -482,7 +482,7 @@ class ContextBuilder:
             ) for f in out_rep_fail
         ]
 
-        return ContextBundle(
+        bundle = ContextBundle(
             task=task,
             phase=phase,
             status=status,
@@ -509,6 +509,22 @@ class ContextBuilder:
             include_verification=cfg.include_verification,
             include_telemetry=inc_telemetry,
         )
+        return bundle, report
+
+    def build(
+        self,
+        state_or_manager: Union[TaskState, MemoryManager],
+        config: Optional[ContextConfig] = None,
+        repository_index: Optional[RepositoryIndex] = None,
+        max_tokens: Optional[int] = None,
+    ) -> ContextBundle:
+        bundle, _ = self.build_with_report(
+            state_or_manager=state_or_manager,
+            config=config,
+            repository_index=repository_index,
+            max_tokens=max_tokens,
+        )
+        return bundle
 
     def render_text(
         self,

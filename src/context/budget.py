@@ -101,6 +101,7 @@ class ContextBudgetResult:
     was_reduced: bool
     hard_truncated: bool
     reductions: list[str] = field(default_factory=list)
+    final_config: Optional[dict[str, Any]] = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -111,6 +112,7 @@ class ContextBudgetResult:
             "was_reduced": self.was_reduced,
             "hard_truncated": self.hard_truncated,
             "reductions": list(self.reductions),
+            "final_config": self.final_config,
         }
 
 
@@ -206,6 +208,7 @@ class ContextBudgeter:
                 was_reduced=False,
                 hard_truncated=False,
                 reductions=[],
+                final_config=effective_cfg.to_dict(),
             )
 
         reductions: list[str] = []
@@ -224,6 +227,7 @@ class ContextBudgeter:
                     was_reduced=True,
                     hard_truncated=False,
                     reductions=reductions,
+                    final_config=effective_cfg.to_dict(),
                 )
 
         # Reduction Stage 2: Disable successful attempt history
@@ -240,6 +244,7 @@ class ContextBudgeter:
                     was_reduced=True,
                     hard_truncated=False,
                     reductions=reductions,
+                    final_config=effective_cfg.to_dict(),
                 )
 
         # Reduction Stage 3: BROAD repository scope -> FOCUSED
@@ -257,6 +262,7 @@ class ContextBudgeter:
                     was_reduced=True,
                     hard_truncated=False,
                     reductions=reductions,
+                    final_config=effective_cfg.to_dict(),
                 )
 
         # Reduction Stage 4: Disable repository overview
@@ -273,6 +279,7 @@ class ContextBudgeter:
                     was_reduced=True,
                     hard_truncated=False,
                     reductions=reductions,
+                    final_config=effective_cfg.to_dict(),
                 )
 
         # Reduction Stage 5: Reduce max_discoveries (halve window)
@@ -290,6 +297,7 @@ class ContextBudgeter:
                     was_reduced=True,
                     hard_truncated=False,
                     reductions=reductions,
+                    final_config=effective_cfg.to_dict(),
                 )
 
         # Reduction Stage 6: Reduce max_observations (halve window)
@@ -307,6 +315,7 @@ class ContextBudgeter:
                     was_reduced=True,
                     hard_truncated=False,
                     reductions=reductions,
+                    final_config=effective_cfg.to_dict(),
                 )
 
         # Reduction Stage 7: Reduce successful/failed attempt windows (halve window)
@@ -324,6 +333,7 @@ class ContextBudgeter:
                     was_reduced=True,
                     hard_truncated=False,
                     reductions=reductions,
+                    final_config=effective_cfg.to_dict(),
                 )
 
         # Reduction Stage 8: FOCUSED repository scope -> MINIMAL
@@ -341,6 +351,7 @@ class ContextBudgeter:
                     was_reduced=True,
                     hard_truncated=False,
                     reductions=reductions,
+                    final_config=effective_cfg.to_dict(),
                 )
 
         # Reduction Stage 9: Disable broader symbols
@@ -357,6 +368,7 @@ class ContextBudgeter:
                     was_reduced=True,
                     hard_truncated=False,
                     reductions=reductions,
+                    final_config=effective_cfg.to_dict(),
                 )
 
         # Reduction Stage 10: Disable local imports if still required
@@ -373,6 +385,7 @@ class ContextBudgeter:
                     was_reduced=True,
                     hard_truncated=False,
                     reductions=reductions,
+                    final_config=effective_cfg.to_dict(),
                 )
 
         # Further progressive reductions before hard truncation:
@@ -390,6 +403,7 @@ class ContextBudgeter:
                     was_reduced=True,
                     hard_truncated=False,
                     reductions=reductions,
+                    final_config=effective_cfg.to_dict(),
                 )
 
         # Clear observations completely
@@ -406,6 +420,7 @@ class ContextBudgeter:
                     was_reduced=True,
                     hard_truncated=False,
                     reductions=reductions,
+                    final_config=effective_cfg.to_dict(),
                 )
 
         # Clear attempt window completely
@@ -422,6 +437,7 @@ class ContextBudgeter:
                     was_reduced=True,
                     hard_truncated=False,
                     reductions=reductions,
+                    final_config=effective_cfg.to_dict(),
                 )
 
         # Disable failed attempts
@@ -438,6 +454,7 @@ class ContextBudgeter:
                     was_reduced=True,
                     hard_truncated=False,
                     reductions=reductions,
+                    final_config=effective_cfg.to_dict(),
                 )
 
         # Disable repeated failures
@@ -454,6 +471,7 @@ class ContextBudgeter:
                     was_reduced=True,
                     hard_truncated=False,
                     reductions=reductions,
+                    final_config=effective_cfg.to_dict(),
                 )
 
         # Disable verification
@@ -470,6 +488,7 @@ class ContextBudgeter:
                     was_reduced=True,
                     hard_truncated=False,
                     reductions=reductions,
+                    final_config=effective_cfg.to_dict(),
                 )
 
         # Final Hard Fallback: deterministic character truncation to budget limit
@@ -499,4 +518,5 @@ class ContextBudgeter:
             was_reduced=True,
             hard_truncated=True,
             reductions=reductions,
+            final_config=effective_cfg.to_dict(),
         )
