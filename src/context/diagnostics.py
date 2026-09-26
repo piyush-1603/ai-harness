@@ -274,8 +274,13 @@ class ContextDiagnosticsEngine:
 
         candidates = []
         
-        # Build lookup for artifacts
-        obs_map = {f"obs_{i}": o for i, o in enumerate(state.recent_observations)}
+        # Build lookup for artifacts using exact slice that ContextBuilder used
+        if final_config.max_observations > 0:
+            diagnostic_obs_slice = state.recent_observations[-final_config.max_observations:]
+        else:
+            diagnostic_obs_slice = []
+
+        obs_map = {f"obs_{i}": o for i, o in enumerate(diagnostic_obs_slice)}
 
         def extract_candidate(c_dict, selected: bool):
             cid = c_dict["id"]

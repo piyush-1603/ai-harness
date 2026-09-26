@@ -22,7 +22,7 @@ from src.memory.models import (
 )
 
 from src.context.relevance import ContextCandidate, RelevanceScorer
-from src.context.packing import ContextPacker
+from src.context.packing import ContextPacker, ContextPackingReport
 
 def _format_symbols_compact(fs: FileSymbols) -> list[str]:
     lines: list[str] = [fs.path]
