@@ -19,6 +19,7 @@ from src.memory.models import (
     TaskStatus,
     TokenUsage,
     VerificationResult,
+    _normalize_paths,
     now_iso,
 )
 from src.memory.storage import TaskStorage
@@ -189,19 +190,20 @@ class MemoryManager:
     def add_relevant_file(self, path: str) -> bool:
         """
         Add a file to relevant_files, preventing duplicates.
+        Canonicalizes path before duplicate comparison and storage.
         Returns True if added, False if already present.
         """
         state = self.get_state()
         norm_path = os.path.normpath(path)
-        if path in state.relevant_files or norm_path in state.relevant_files:
+        if norm_path in state.relevant_files:
             return False
 
-        state.relevant_files.append(path)
+        state.relevant_files.append(norm_path)
         state.updated_at = now_iso()
         self._record_event(
             EventType.RELEVANT_FILE_ADDED,
-            summary=f"Relevant file added: {path}",
-            metadata={"path": path},
+            summary=f"Relevant file added: {norm_path}",
+            metadata={"path": norm_path, "raw_path": path},
         )
         return True
 
@@ -212,19 +214,20 @@ class MemoryManager:
     def mark_file_touched(self, path: str) -> bool:
         """
         Add a file to touched_files, preventing duplicates.
+        Canonicalizes path before duplicate comparison and storage.
         Returns True if added, False if already present.
         """
         state = self.get_state()
         norm_path = os.path.normpath(path)
-        if path in state.touched_files or norm_path in state.touched_files:
+        if norm_path in state.touched_files:
             return False
 
-        state.touched_files.append(path)
+        state.touched_files.append(norm_path)
         state.updated_at = now_iso()
         self._record_event(
             EventType.FILE_TOUCHED,
-            summary=f"File touched: {path}",
-            metadata={"path": path},
+            summary=f"File touched: {norm_path}",
+            metadata={"path": norm_path, "raw_path": path},
         )
         return True
 
@@ -241,6 +244,8 @@ class MemoryManager:
         state = self.get_state()
         if isinstance(discovery, dict):
             discovery = Discovery.from_dict(discovery)
+        else:
+            discovery.files = _normalize_paths(discovery.files)
 
         state.discoveries.append(discovery)
         state.updated_at = now_iso()
@@ -256,6 +261,8 @@ class MemoryManager:
         state = self.get_state()
         if isinstance(observation, dict):
             observation = Observation.from_dict(observation)
+        else:
+            observation.files = _normalize_paths(observation.files)
 
         state.recent_observations.append(observation)
         state.updated_at = now_iso()
@@ -273,16 +280,18 @@ class MemoryManager:
     def add_attempt(self, attempt: Union[Attempt, dict[str, Any]]) -> Attempt:
         """
         Record an action attempt, automatically updating touched_files if specified.
+        Canonicalizes file paths before comparison and storage.
         """
         state = self.get_state()
         if isinstance(attempt, dict):
             attempt = Attempt.from_dict(attempt)
+        else:
+            attempt.files_touched = _normalize_paths(attempt.files_touched)
 
         state.attempts.append(attempt)
-        for f in attempt.files_touched:
-            norm_f = os.path.normpath(f)
-            if f not in state.touched_files and norm_f not in state.touched_files:
-                state.touched_files.append(f)
+        for norm_f in attempt.files_touched:
+            if norm_f not in state.touched_files:
+                state.touched_files.append(norm_f)
 
         state.updated_at = now_iso()
         self._record_event(
@@ -311,6 +320,8 @@ class MemoryManager:
         state = self.get_state()
         if isinstance(failure, dict):
             failure = Failure.from_dict(failure)
+        else:
+            failure.files = _normalize_paths(failure.files)
 
         existing = next(
             (f for f in state.failures if f.error_signature == failure.error_signature),
@@ -331,9 +342,9 @@ class MemoryManager:
                 existing.summary = failure.summary
             if failure.action:
                 existing.action = failure.action
-            for f in failure.files:
-                if f not in existing.files:
-                    existing.files.append(f)
+            for norm_f in failure.files:
+                if norm_f not in existing.files:
+                    existing.files.append(norm_f)
 
             state.updated_at = now
             self._record_event(

@@ -6,6 +6,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 import json
+import os
 from typing import Any, Optional, Union
 
 
@@ -25,6 +26,23 @@ def _format_timestamp(ts: Any) -> str:
             ts = ts.replace(tzinfo=timezone.utc)
         return ts.isoformat()
     return str(ts)
+
+
+def _normalize_paths(paths: Any) -> list[str]:
+    """
+    Deterministically normalize repository file paths without converting to absolute paths.
+    Eliminates redundant separators, dot segments (./), and parent segments (../)
+    while preserving relative paths and deduplicating preserving order.
+    """
+    if not paths:
+        return []
+    result: list[str] = []
+    for p in paths:
+        if p:
+            norm = os.path.normpath(str(p))
+            if norm not in result:
+                result.append(norm)
+    return result
 
 
 class Phase(str, Enum):
@@ -79,6 +97,7 @@ class Observation:
         self.timestamp = _format_timestamp(self.timestamp)
         if not isinstance(self.files, list):
             self.files = list(self.files)
+        self.files = _normalize_paths(self.files)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -118,6 +137,7 @@ class Attempt:
         self.timestamp = _format_timestamp(self.timestamp)
         if not isinstance(self.files_touched, list):
             self.files_touched = list(self.files_touched)
+        self.files_touched = _normalize_paths(self.files_touched)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -165,6 +185,7 @@ class Failure:
             self.resolved_at = _format_timestamp(self.resolved_at)
         if not isinstance(self.files, list):
             self.files = list(self.files)
+        self.files = _normalize_paths(self.files)
         self.resolved = bool(self.resolved)
 
     def to_dict(self) -> dict[str, Any]:
@@ -209,6 +230,7 @@ class Discovery:
         self.timestamp = _format_timestamp(self.timestamp)
         if not isinstance(self.files, list):
             self.files = list(self.files)
+        self.files = _normalize_paths(self.files)
         self.confidence = float(self.confidence)
 
     def to_dict(self) -> dict[str, Any]:
@@ -381,8 +403,10 @@ class TaskState:
             self.plan = list(self.plan)
         if not isinstance(self.relevant_files, list):
             self.relevant_files = list(self.relevant_files)
+        self.relevant_files = _normalize_paths(self.relevant_files)
         if not isinstance(self.touched_files, list):
             self.touched_files = list(self.touched_files)
+        self.touched_files = _normalize_paths(self.touched_files)
         if not isinstance(self.current_errors, list):
             self.current_errors = list(self.current_errors)
         if isinstance(self.token_usage, dict):
