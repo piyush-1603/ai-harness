@@ -406,7 +406,7 @@ class Orchestrator:
                     last_error=self.last_error,
                     verified=is_verified,
                     verification_report=verification_report,
-                    verification_error=verification_error,
+                    verification_error=self.last_error,
                     start_time=start_time,
                     tool_call_counts=tool_call_counts,
                     files_inspected=files_inspected,
