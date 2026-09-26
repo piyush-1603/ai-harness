@@ -11,10 +11,6 @@ Manages the core autonomous coding loop, coordinating:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from src.common.types import ToolResult, ScratchpadState, VerificationResult
-from src.common.types import ToolCall, ToolName
-from src.orchestrator.model_adapter import ModelCompletion
-
 from enum import Enum, auto
 import json
 import logging
@@ -37,24 +33,27 @@ from src.common.types import (
     VerificationResult,
     VerificationStatus,
 )
+from src.context.budget import ContextBudgeter
 from src.context.builder import ContextBuilder
 from src.context.bundle import ContextBundle
 from src.context.config import ContextConfig
-from src.memory.manager import MemoryManager
-from src.memory.models import (
-    Attempt,
-    Failure,
-    Observation,
-    TaskState,
-    TaskStatus,
-)
+from src.context.policy import AdaptiveContextPolicy
+from src.context.scanner import RepositoryIndex, RepositoryScanner
 from src.memory.adapters import (
     attempt_from_tool_result,
     failure_from_verification_report,
     observation_from_tool_result,
     verification_from_report,
 )
-from src.verification.verifier import VerificationEngine
+from src.memory.manager import MemoryManager
+from src.memory.models import (
+    Attempt,
+    Failure,
+    Observation,
+    Phase,
+    TaskState,
+    TaskStatus,
+)
 from src.orchestrator.model_adapter import (
     ModelAdapter,
     ModelAPIError,
@@ -64,6 +63,7 @@ from src.orchestrator.model_adapter import (
 from src.orchestrator.prompting import PromptBuilder
 from src.orchestrator.recovery import RecoveryDecision, RecoveryManager
 from src.tools.registry import ToolEngine
+from src.verification.verifier import VerificationEngine
 
 logger = logging.getLogger(__name__)
 
@@ -109,14 +109,14 @@ class Orchestrator:
     def __init__(
         self,
         context=None,
-        tools=None,
+        tool_engine=None,
         verifier=None,
         model=None,
-        config: OrchestratorConfig = None,
+        tools=None,
         model_adapter=None,
-        tool_engine=None,
         memory_manager=None,
         context_builder=None,
+        config: OrchestratorConfig = None,
     ):
         """
         context: object implementing get_scratchpad() / update_scratchpad()
@@ -129,14 +129,17 @@ class Orchestrator:
         self.context = context
         self.verifier = verifier if verifier is not None else VerificationEngine()
         self.model = model
+        self.tools = tools
         self.config = config or OrchestratorConfig()
 
         self._is_legacy_stub = (
-            model_adapter is None and tool_engine is None
+            (verifier is not None and model is not None)
+            or (tools is not None and hasattr(tools, "explore"))
+            or (self.context is not None and model_adapter is None and (verifier is not None or tools is not None))
         )
 
         # ModelAdapter
-        self.model_adapter = model_adapter or ModelAdapter()
+        self.model_adapter = model_adapter or (model if isinstance(model, ModelAdapter) else ModelAdapter())
 
         # ToolEngine resolution
         if tool_engine is not None and hasattr(tool_engine, "execute"):
@@ -153,6 +156,8 @@ class Orchestrator:
         # Memory and Context systems
         self.memory_manager = memory_manager or MemoryManager()
         self.context_builder = context_builder or ContextBuilder()
+        self.context_policy = AdaptiveContextPolicy()
+        self.context_budgeter = ContextBudgeter()
 
         # Legacy and state tracking
         self.state = State.EXPLORING
@@ -195,6 +200,9 @@ class Orchestrator:
             task=task_spec.issue_description,
         )
         self.memory_manager.set_hypothesis(f"Investigating: {task_spec.issue_description}")
+        self.memory_manager.set_phase(Phase.PLAN)
+
+        repo_index = RepositoryScanner().scan(task_spec.workspace_dir)
 
         step_count = 0
         max_steps = self.config.step_limit
@@ -214,10 +222,15 @@ class Orchestrator:
             self.memory_manager.increment_iteration()
 
             # 1. Build context from MemoryManager and accumulated interaction state
-            context_bundle = self.context_builder.build(self.memory_manager)
+            profile = self.context_policy.evaluate(self.memory_manager, repo_index=repo_index)
+            budget_result = self.context_budgeter.fit(
+                state=self.memory_manager,
+                config=profile,
+                repository_index=repo_index,
+            )
             turn_prompt = self._build_turn_prompt(
                 task_spec=task_spec,
-                context_bundle=context_bundle,
+                context_text=budget_result.text,
                 last_tool_call=last_tool_call,
                 last_tool_result=last_tool_result,
             )
@@ -283,6 +296,7 @@ class Orchestrator:
                         summary=f"Model completion: {decision.message}",
                     )
                 )
+                self.memory_manager.set_phase(Phase.VERIFY)
 
                 # Slice 4: Independent verification before declaring task completion
                 verification_report: Optional[VerificationReport] = None
@@ -318,6 +332,10 @@ class Orchestrator:
                     fail = failure_from_verification_report(verification_report)
                     if fail is not None:
                         self.memory_manager.add_failure(fail)
+                        if verification_report.failure_classification:
+                            self.memory_manager.set_current_errors([verification_report.failure_classification.value])
+                        elif verification_report.summary:
+                            self.memory_manager.set_current_errors([verification_report.summary])
                         self.memory_manager.record_observation(
                             Observation(
                                 type="verification_failure",
@@ -347,7 +365,13 @@ class Orchestrator:
                             )
                         )
 
-                final_status = "completed" if is_verified else "failed"
+                if is_verified:
+                    final_status = "completed"
+                    self.memory_manager.set_current_errors([])
+                    self.memory_manager.set_status(TaskStatus.DONE)
+                else:
+                    final_status = "failed"
+                    self.memory_manager.set_phase(Phase.RECOVER)
 
                 return self._make_report(
                     status=final_status,
@@ -367,6 +391,7 @@ class Orchestrator:
                 )
 
             elif isinstance(decision, ToolCall):
+                self.memory_manager.set_phase(Phase.EXECUTE)
                 call_name = decision.tool_name.value
                 tool_call_counts[call_name] = tool_call_counts.get(call_name, 0) + 1
 
@@ -378,11 +403,18 @@ class Orchestrator:
                 # Track inspected/modified paths
                 arg_path = decision.tool_args.get("path")
                 if arg_path and isinstance(arg_path, str):
-                    if decision.tool_name in (ToolName.READ_FILE, ToolName.GREP_SEARCH, ToolName.LIST_DIRECTORY):
+                    if decision.tool_name in (
+                        ToolName.READ_FILE,
+                        ToolName.LIST_DIRECTORY,
+                        ToolName.GREP_SEARCH,
+                    ):
                         if arg_path not in files_inspected:
                             files_inspected.append(arg_path)
                             self.memory_manager.add_relevant_file(arg_path)
-                    elif decision.tool_name in (ToolName.EDIT_FILE, ToolName.WRITE_FILE):
+                    elif decision.tool_name in (
+                        ToolName.WRITE_FILE,
+                        ToolName.EDIT_FILE,
+                    ):
                         if arg_path not in files_modified:
                             files_modified.append(arg_path)
                             self.memory_manager.add_touched_file(arg_path)
@@ -391,21 +423,21 @@ class Orchestrator:
                                 if hasattr(sp, "files_touched") and arg_path not in sp.files_touched:
                                     sp.files_touched.append(arg_path)
 
-                # Record observation
+                # Record observation using I1 adapter
                 obs = observation_from_tool_result(
-                    result=tool_result,
-                    files=[arg_path] if arg_path else []
+                    tool_result,
+                    files=[arg_path] if arg_path else [],
                 )
                 self.memory_manager.record_observation(obs)
 
-                # Record attempt
+                # Record attempt using I1 adapter
                 action_str = f"{decision.tool_name.value}({json.dumps(decision.tool_args, sort_keys=True)})"
                 attempt = attempt_from_tool_result(
-                    result=tool_result,
+                    tool_result,
                     attempt_id=f"step_{step_count}",
                     action=action_str,
                     files_touched=[arg_path] if decision.tool_name in (ToolName.EDIT_FILE, ToolName.WRITE_FILE) and arg_path else [],
-                    iteration=step_count
+                    iteration=step_count,
                 )
                 self.memory_manager.record_attempt(attempt)
                 self.memory_manager.record_tool_call()
@@ -424,11 +456,13 @@ class Orchestrator:
 
         # Exceeded step limit without completion
         self.state = State.ESCALATE
+        self.memory_manager.set_status(TaskStatus.BLOCKED)
         return self._make_report(
             status="blocked_step_cap",
             step_count=step_count,
             task_spec=task_spec,
             last_error=self.last_error or "Exceeded HARNESS_MAX_STEPS limit",
+            verified=False,
             start_time=start_time,
             tool_call_counts=tool_call_counts,
             files_inspected=files_inspected,
@@ -440,11 +474,13 @@ class Orchestrator:
     def _build_turn_prompt(
         self,
         task_spec: TaskSpec,
-        context_bundle: ContextBundle,
+        context_text: Optional[str] = None,
+        context_bundle: Optional[ContextBundle] = None,
         last_tool_call: Optional[ToolCall] = None,
         last_tool_result: Optional[ToolResult] = None,
         recovery_hint: Optional[str] = None,
     ) -> str:
+        ctx_str = context_text if context_text is not None else (context_bundle.render_text() if context_bundle is not None else "")
         prompt_parts: list[str] = [
             "You are an autonomous AI coding agent. You can explore a repository, edit files, and run tests.",
             "Your goal is to fix the issue described and verify your changes.",
@@ -467,7 +503,7 @@ class Orchestrator:
             "For completion:",
             '{"action": "complete", "message": "<resolution description>"}',
             "",
-            context_bundle.render_text(),
+            ctx_str,
         ]
 
         if last_tool_call is not None and last_tool_result is not None:
@@ -608,11 +644,17 @@ class Orchestrator:
 
             elif self.state == State.TESTING:
                 self._test()
-            elif self.state == State.DONE:
+            # Check immediately after testing to avoid loop termination false negatives
+            if self.state == State.DONE:
                 return self._report("resolved")
             elif self.state == State.ESCALATE:
                 return self._report("blocked")
 
+        # Check one last time before declaring blocked_step_cap
+        if self.state == State.DONE:
+            return self._report("resolved")
+
+        # Ran out of attempts without resolving or explicitly escalating
         self.state = State.ESCALATE
         return self._report("blocked_step_cap")
 
@@ -672,9 +714,3 @@ class Orchestrator:
             "last_error": self.recovery_manager.last_error_signature,
             "scratchpad": self.context.get_scratchpad(),
         }
-
-
-# ---------------------------------------------------------------------------
-# Stubs for backward-compatible imports and testing
-# ---------------------------------------------------------------------------
-

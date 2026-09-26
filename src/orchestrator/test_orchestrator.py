@@ -53,10 +53,12 @@ class StubModel:
         self.tools_per_phase = tools_per_phase
     def decide(self, prompt):
         self.calls += 1
-        if self.calls % (self.tools_per_phase + 1) == 0:
+        if self.calls == 1:
+            return ToolCall(tool_name=ToolName.RUN_BASH, tool_args={"command": "sed -i '' 's/0.1/0.9/' app.py"}, call_id="abc")
+        elif self.calls % 2 == 0:
             return ModelCompletion(message="Done")
-        return ToolCall(tool_name=ToolName.RUN_BASH, tool_args={}, call_id="abc")
-
+        else:
+            return ToolCall(tool_name=ToolName.RUN_BASH, tool_args={"command": "echo dummy"}, call_id="abc")
 def test_resolves_immediately_when_verification_passes():
     orch = Orchestrator(StubContext(), StubToolEngine(), StubVerifier(0), StubModel(), config=OrchestratorConfig(step_limit=10))
     report = orch.run("issue")

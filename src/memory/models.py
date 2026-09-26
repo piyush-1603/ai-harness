@@ -325,6 +325,9 @@ class VerificationSnapshot:
         )
 
 
+VerificationResult = VerificationSnapshot
+
+
 @dataclass
 class Event:
     """Lightweight append-only event record for state mutations."""
