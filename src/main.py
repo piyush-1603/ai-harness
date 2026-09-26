@@ -10,6 +10,7 @@ from src.context.scanner import RepositoryScanner
 from src.memory.manager import MemoryManager
 from src.orchestrator.model_adapter import ModelAdapter
 from src.orchestrator.orchestrator import Orchestrator, OrchestratorConfig
+from src.tools.file_ops import truncate_output
 from src.tools.registry import ToolEngine
 from src.verification.verifier import VerificationEngine
 
@@ -121,6 +122,30 @@ def main():
     print("\n--- Final Report ---")
     print(f"Status: {report['status']}")
     print(f"Verified: {report.get('verified', False)}")
+
+    verification_status = report.get("verification_status")
+    if verification_status:
+        print(f"Verification: {verification_status}")
+
+    failure_class = report.get("failure_classification")
+    if failure_class:
+        print(f"Failure Classification: {failure_class}")
+
+    test_cmd = report.get("test_command")
+    if test_cmd:
+        print(f"Test Command: {test_cmd}")
+
+    if not report.get("verified", False):
+        v_rep = report.get("verification_report")
+        if v_rep and getattr(v_rep, "summary", None):
+            print(f"Verification Summary: {v_rep.summary}")
+        test_out = (report.get("test_output") or "").strip()
+        if test_out:
+            print("Test Output:")
+            print(truncate_output(test_out, max_chars=1000))
+        elif report.get("verification_error"):
+            print(f"Verification Error: {report['verification_error']}")
+
     print(f"Attempts: {report.get('n_calls', 0)}")
     print(f"Cost: ${report.get('cost', 0.0):.2f}")
     if report.get("last_error"):

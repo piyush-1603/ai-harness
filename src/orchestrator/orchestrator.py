@@ -87,6 +87,24 @@ class State(Enum):
     ESCALATE = auto()
 
 
+class _LegacyContext:
+    """Internal context fallback for legacy test harness backward compatibility."""
+
+    def __init__(self) -> None:
+        self._state = ScratchpadState()
+
+    def get_scratchpad(self) -> ScratchpadState:
+        return self._state
+
+    def update_scratchpad(
+        self, hypothesis: Optional[str] = None, attempt: Optional[str] = None
+    ) -> None:
+        if hypothesis:
+            self._state.hypothesis = hypothesis
+        if attempt:
+            self._state.attempt_history.append(attempt)
+
+
 class Orchestrator:
     def __init__(
         self,
@@ -329,8 +347,10 @@ class Orchestrator:
                             )
                         )
 
+                final_status = "completed" if is_verified else "failed"
+
                 return self._make_report(
-                    status="completed",
+                    status=final_status,
                     step_count=step_count,
                     task_spec=task_spec,
                     completion_message=decision.message,
@@ -576,7 +596,7 @@ class Orchestrator:
 
     def _run_legacy(self, issue: str) -> dict:
         if self.context is None:
-            self.context = StubContext()
+            self.context = _LegacyContext()
         self.context.update_scratchpad(hypothesis=f"Investigating: {issue}")
 
         while self.n_calls < self.config.step_limit and self.cost < self.config.cost_limit:

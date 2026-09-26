@@ -56,10 +56,10 @@ class TestRealOrchestrationLoop(unittest.TestCase):
             )
             report = orch.run(task)
 
-            self.assertEqual(report["status"], "completed")
+            self.assertEqual(report["status"], "failed")
             self.assertEqual(report["n_calls"], 2)
             self.assertEqual(report["message"], "File inspected and verified.")
-            self.assertFalse(report["verified"])  # Distinction preserved for next slice
+            self.assertFalse(report["verified"])  # Unverified workspace must not be completed
             self.assertIn("read_file", report["telemetry"].tool_call_counts)
             self.assertEqual(report["telemetry"].tool_call_counts["read_file"], 1)
             self.assertIn("sample.py", report["telemetry"].files_inspected)
@@ -93,7 +93,8 @@ class TestRealOrchestrationLoop(unittest.TestCase):
             )
             report = orch.run(task)
 
-            self.assertEqual(report["status"], "completed")
+            self.assertEqual(report["status"], "failed")
+            self.assertFalse(report["verified"])
             self.assertEqual(report["n_calls"], 3)
             self.assertEqual((Path(tmp_dir) / "calc.py").read_text(), "x = 42\n")
             self.assertIn("calc.py", report["telemetry"].files_modified)
@@ -121,7 +122,8 @@ class TestRealOrchestrationLoop(unittest.TestCase):
             )
             report = orch.run(task)
 
-            self.assertEqual(report["status"], "completed")
+            self.assertEqual(report["status"], "failed")
+            self.assertFalse(report["verified"])
             self.assertEqual(report["n_calls"], 5)
             self.assertEqual(report["telemetry"].total_tool_calls, 4)
 
@@ -182,7 +184,8 @@ class TestRealOrchestrationLoop(unittest.TestCase):
                 )
             )
 
-            self.assertEqual(report["status"], "completed")
+            self.assertEqual(report["status"], "failed")
+            self.assertFalse(report["verified"])
             # Verify tool failure was recorded and returned
             state = orch.memory_manager.get_state()
             read_obs = [o for o in state.recent_observations if o.source == "read_file"]
@@ -253,7 +256,8 @@ class TestRealOrchestrationLoop(unittest.TestCase):
                 )
             )
 
-            self.assertEqual(report["status"], "completed")
+            self.assertEqual(report["status"], "failed")
+            self.assertFalse(report["verified"])
             self.assertIsNotNone(report["last_error"])
             self.assertTrue(
                 "does not exist" in report["last_error"].lower()
@@ -281,7 +285,8 @@ class TestRealOrchestrationLoop(unittest.TestCase):
                 )
             )
 
-            self.assertEqual(report["status"], "completed")
+            self.assertEqual(report["status"], "failed")
+            self.assertFalse(report["verified"])
             self.assertIsNone(report["last_error"])
 
     def test_production_real_loop_does_not_instantiate_stub_context(self):
@@ -458,7 +463,7 @@ class TestSlice4VerificationIntegration(unittest.TestCase):
             )
             report = orch.run(task)
 
-            self.assertEqual(report["status"], "completed")
+            self.assertEqual(report["status"], "failed")
             self.assertFalse(report["verified"])
             self.assertEqual(report["verification_status"], VerificationStatus.FAILED.value)
             self.assertFalse(report["verification_report"].tests_passed)
@@ -494,7 +499,7 @@ class TestSlice4VerificationIntegration(unittest.TestCase):
             )
             report = orch.run(task)
 
-            self.assertEqual(report["status"], "completed")
+            self.assertEqual(report["status"], "failed")
             self.assertFalse(report["verified"])
             self.assertEqual(report["verification_status"], VerificationStatus.NO_CHANGES.value)
             self.assertFalse(report["verification_report"].is_verified)
@@ -520,6 +525,7 @@ class TestSlice4VerificationIntegration(unittest.TestCase):
             )
             report = orch.run(task)
 
+            self.assertEqual(report["status"], "failed")
             self.assertFalse(report["verified"])
             self.assertEqual(report["verification_status"], VerificationStatus.FAILED.value)
             self.assertFalse(report["verification_report"].is_verified)
@@ -707,6 +713,9 @@ class TestSlice4VerificationIntegration(unittest.TestCase):
             )
             report = orch.run(task)
 
+            self.assertEqual(report["status"], "failed")
+            self.assertFalse(report["verified"])
+
             # MemoryManager task state
             task_state = memory_mgr.get_state()
             self.assertEqual(task_state.task_id, "test-9j")
@@ -727,6 +736,73 @@ class TestSlice4VerificationIntegration(unittest.TestCase):
             obs = task_state.recent_observations
             self.assertTrue(any(o.type == "verification_failure" for o in obs))
             self.assertTrue(any(o.type == "tool_result" for o in obs))
+
+    def test_completed_status_never_paired_with_unverified(self):
+        """Regression: status == 'completed' AND verified == False cannot be produced by real verification."""
+        scenarios = [
+            # 1. Failing tests
+            (
+                "def add(a, b): return a * b\n",
+                "python3 test_calc.py",
+                "Fixed by multiply",
+            ),
+            # 2. Syntax error
+            (
+                "def add(a, b): return a ++\n",
+                "python3 test_calc.py",
+                "Fixed with syntax error",
+            ),
+        ]
+        for code_fix, cmd, msg in scenarios:
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                ws = Path(tmp_dir)
+                self._init_repo(ws)
+                (ws / "calc.py").write_text("def add(a, b): return a - b\n")
+                (ws / "test_calc.py").write_text("from calc import add\nassert add(2, 3) == 5\n")
+                subprocess.run(["git", "add", "."], cwd=str(ws), check=True, capture_output=True)
+                subprocess.run(["git", "commit", "-m", "init"], cwd=str(ws), check=True, capture_output=True)
+
+                mock_responses = [
+                    json.dumps({
+                        "tool_name": "write_file",
+                        "tool_args": {"path": "calc.py", "content": code_fix},
+                    }),
+                    json.dumps({"action": "complete", "message": msg}),
+                ]
+                adapter = ModelAdapter(mock_mode=True, mock_responses=mock_responses)
+                engine = ToolEngine(workspace_dir=tmp_dir)
+                verifier = VerificationEngine()
+                orch = Orchestrator(model_adapter=adapter, tool_engine=engine, verifier=verifier)
+
+                task = TaskSpec(
+                    issue_id="test-invariant",
+                    issue_description="Invariant check",
+                    workspace_dir=tmp_dir,
+                    test_command=cmd,
+                )
+                report = orch.run(task)
+
+                # Authoritative invariant: status == "completed" and verified == False CANNOT happen
+                self.assertFalse(
+                    report["status"] == "completed" and not report["verified"],
+                    f"Invariant violated: status={report['status']}, verified={report['verified']}",
+                )
+                self.assertEqual(report["status"], "failed")
+                self.assertFalse(report["verified"])
+
+    def test_orchestrator_construction_no_undefined_stub_context(self):
+        """Regression: orchestrator construction with context=None runs legacy cleanly without NameError."""
+        from src.orchestrator.test_orchestrator import StubToolEngine, StubVerifier, StubModel
+        orch = Orchestrator(
+            context=None,
+            tools=StubToolEngine(),
+            verifier=StubVerifier(0),
+            model=StubModel(),
+            config=OrchestratorConfig(step_limit=10),
+        )
+        report = orch.run("test legacy context fallback")
+        self.assertEqual(report["status"], "resolved")
+        self.assertIsNotNone(report["scratchpad"])
 
 
 if __name__ == "__main__":
