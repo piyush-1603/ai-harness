@@ -393,6 +393,14 @@ def test_context_profile_to_context_config_conversion() -> None:
     assert cfg.max_attempts == 10
     assert cfg.max_discoveries == 20
     assert cfg.include_successful_attempts is True
+    assert cfg.include_failed_attempts is True
+    assert cfg.include_repeated_failures is True
+    assert cfg.include_verification is True
+    assert cfg.include_telemetry is True
+    assert cfg.include_repository_overview is True
+    assert cfg.include_symbols is True
+    assert cfg.include_local_imports is True
+    assert cfg.repository_scope == RepositoryScope.BROAD
     assert cfg.include_raw_output is False
 
 

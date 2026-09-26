@@ -42,6 +42,13 @@ class ContextBundle:
     model_call_count: int = 0
     tool_call_count: int = 0
     token_usage: TokenUsage = field(default_factory=TokenUsage)
+    repository_overview: Optional[str] = None
+    repository_symbols: list[str] = field(default_factory=list)
+    repository_local_imports: list[str] = field(default_factory=list)
+    include_failed_attempts: bool = True
+    include_repeated_failures: bool = True
+    include_verification: bool = True
+    include_telemetry: bool = True
 
     # -------------------------------------------------------------------------
     # Convenience Property Aliases
@@ -108,7 +115,70 @@ class ContextBundle:
             "model_call_count": self.model_call_count,
             "tool_call_count": self.tool_call_count,
             "token_usage": self.token_usage.to_dict(),
+            "repository_overview": self.repository_overview,
+            "repository_symbols": list(self.repository_symbols),
+            "repository_local_imports": list(self.repository_local_imports),
+            "include_failed_attempts": self.include_failed_attempts,
+            "include_repeated_failures": self.include_repeated_failures,
+            "include_verification": self.include_verification,
+            "include_telemetry": self.include_telemetry,
         }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> ContextBundle:
+        """Reconstruct a ContextBundle from a dictionary."""
+        phase_raw = data["phase"]
+        try:
+            phase = Phase(phase_raw)
+        except ValueError:
+            phase = phase_raw
+
+        status_raw = data["status"]
+        try:
+            status = TaskStatus(status_raw)
+        except ValueError:
+            status = status_raw
+
+        verif_data = data.get("latest_verification_result")
+        verif = VerificationResult.from_dict(verif_data) if verif_data else None
+
+        return cls(
+            task=data["task"],
+            phase=phase,
+            status=status,
+            plan=list(data.get("plan", [])),
+            current_hypothesis=data.get("current_hypothesis"),
+            relevant_files=list(data.get("relevant_files", [])),
+            touched_files=list(data.get("touched_files", [])),
+            important_discoveries=[
+                Discovery.from_dict(d) for d in data.get("important_discoveries", [])
+            ],
+            recent_observations=[
+                Observation.from_dict(o) for o in data.get("recent_observations", [])
+            ],
+            recent_attempts=[
+                Attempt.from_dict(a) for a in data.get("recent_attempts", [])
+            ],
+            failed_attempts=[
+                Attempt.from_dict(a) for a in data.get("failed_attempts", [])
+            ],
+            repeated_failures=[
+                Failure.from_dict(f) for f in data.get("repeated_failures", [])
+            ],
+            current_errors=list(data.get("current_errors", [])),
+            latest_verification_result=verif,
+            iteration_count=int(data.get("iteration_count", 0)),
+            model_call_count=int(data.get("model_call_count", 0)),
+            tool_call_count=int(data.get("tool_call_count", 0)),
+            token_usage=TokenUsage.from_dict(data.get("token_usage", {})),
+            repository_overview=data.get("repository_overview"),
+            repository_symbols=list(data.get("repository_symbols", [])),
+            repository_local_imports=list(data.get("repository_local_imports", [])),
+            include_failed_attempts=bool(data.get("include_failed_attempts", True)),
+            include_repeated_failures=bool(data.get("include_repeated_failures", True)),
+            include_verification=bool(data.get("include_verification", True)),
+            include_telemetry=bool(data.get("include_telemetry", True)),
+        )
 
     # -------------------------------------------------------------------------
     # Human & Model Readable Text Rendering
@@ -154,7 +224,19 @@ class ContextBundle:
             rel_lines.append("Touched: (None)")
         sections.append("## RELEVANT FILES\n" + "\n".join(rel_lines))
 
-        # 6. DISCOVERIES
+        # 6. REPOSITORY
+        if self.repository_overview:
+            sections.append(f"## REPOSITORY\n{self.repository_overview}")
+
+        # 7. REPOSITORY SYMBOLS
+        if self.repository_symbols:
+            sections.append("## REPOSITORY SYMBOLS\n" + "\n\n".join(self.repository_symbols))
+
+        # 8. LOCAL IMPORTS
+        if self.repository_local_imports:
+            sections.append("## LOCAL IMPORTS\n" + "\n\n".join(self.repository_local_imports))
+
+        # 9. DISCOVERIES
         if self.important_discoveries:
             disc_lines: list[str] = []
             for d in self.important_discoveries:
@@ -164,7 +246,7 @@ class ContextBundle:
         else:
             sections.append("## DISCOVERIES\n(None)")
 
-        # 7. RECENT OBSERVATIONS
+        # 10. RECENT OBSERVATIONS
         if self.recent_observations:
             obs_lines: list[str] = []
             for o in self.recent_observations:
@@ -176,7 +258,7 @@ class ContextBundle:
         else:
             sections.append("## RECENT OBSERVATIONS\n(None)")
 
-        # 8. RECENT SUCCESSFUL ATTEMPTS
+        # 11. RECENT SUCCESSFUL ATTEMPTS
         if self.recent_attempts:
             succ_lines: list[str] = []
             for a in self.recent_attempts:
@@ -186,55 +268,59 @@ class ContextBundle:
         else:
             sections.append("## RECENT SUCCESSFUL ATTEMPTS\n(None)")
 
-        # 9. FAILED ATTEMPTS
-        if self.failed_attempts:
-            att_lines: list[str] = []
-            for a in self.failed_attempts:
-                res_suffix = f" -> {a.result}" if a.result else ""
-                att_lines.append(f"- Attempt {a.id} (iter {a.iteration}): {a.action}{res_suffix}")
-            sections.append("## FAILED ATTEMPTS\n" + "\n".join(att_lines))
-        else:
-            sections.append("## FAILED ATTEMPTS\n(None)")
+        # 12. FAILED ATTEMPTS (omitted if disabled by policy)
+        if self.include_failed_attempts:
+            if self.failed_attempts:
+                att_lines: list[str] = []
+                for a in self.failed_attempts:
+                    res_suffix = f" -> {a.result}" if a.result else ""
+                    att_lines.append(f"- Attempt {a.id} (iter {a.iteration}): {a.action}{res_suffix}")
+                sections.append("## FAILED ATTEMPTS\n" + "\n".join(att_lines))
+            else:
+                sections.append("## FAILED ATTEMPTS\n(None)")
 
-        # 9. REPEATED FAILURES
-        if self.repeated_failures:
-            fail_lines: list[str] = []
-            for f in self.repeated_failures:
-                fail_lines.append(f"- [x{f.occurrence_count}] {f.error_signature}: {f.summary}")
-            sections.append("## REPEATED FAILURES\n" + "\n".join(fail_lines))
-        else:
-            sections.append("## REPEATED FAILURES\n(None)")
+        # 13. REPEATED FAILURES (omitted if disabled by policy)
+        if self.include_repeated_failures:
+            if self.repeated_failures:
+                fail_lines: list[str] = []
+                for f in self.repeated_failures:
+                    fail_lines.append(f"- [x{f.occurrence_count}] {f.error_signature}: {f.summary}")
+                sections.append("## REPEATED FAILURES\n" + "\n".join(fail_lines))
+            else:
+                sections.append("## REPEATED FAILURES\n(None)")
 
-        # 10. CURRENT ERRORS
+        # 14. CURRENT ERRORS
         if self.current_errors:
             err_lines = [f"- {err}" for err in self.current_errors]
             sections.append("## CURRENT ERRORS\n" + "\n".join(err_lines))
         else:
             sections.append("## CURRENT ERRORS\n(None)")
 
-        # 11. VERIFICATION
-        if self.latest_verification_result:
-            v = self.latest_verification_result
-            v_lines = [
-                f"Success: {v.success}",
-                f"Summary: {v.summary}",
-            ]
-            if v.tests_passed:
-                v_lines.append(f"Passed: {v.tests_passed}")
-            if v.tests_failed:
-                v_lines.append(f"Failed: {v.tests_failed}")
-            sections.append("## VERIFICATION\n" + "\n".join(v_lines))
-        else:
-            sections.append("## VERIFICATION\n(None)")
+        # 15. VERIFICATION (omitted if disabled by policy)
+        if self.include_verification:
+            if self.latest_verification_result:
+                v = self.latest_verification_result
+                v_lines = [
+                    f"Success: {v.success}",
+                    f"Summary: {v.summary}",
+                ]
+                if v.tests_passed:
+                    v_lines.append(f"Passed: {v.tests_passed}")
+                if v.tests_failed:
+                    v_lines.append(f"Failed: {v.tests_failed}")
+                sections.append("## VERIFICATION\n" + "\n".join(v_lines))
+            else:
+                sections.append("## VERIFICATION\n(None)")
 
-        # 12. EFFICIENCY
-        eff_lines = [
-            f"Iteration: {self.iteration_count}",
-            f"Model Calls: {self.model_call_count}",
-            f"Tool Calls: {self.tool_call_count}",
-            f"Token Usage: {self.token_usage.total_tokens} total ({self.token_usage.input_tokens} input, {self.token_usage.output_tokens} output)",
-        ]
-        sections.append("## EFFICIENCY\n" + "\n".join(eff_lines))
+        # 16. EFFICIENCY (omitted if disabled by policy)
+        if self.include_telemetry:
+            eff_lines = [
+                f"Iteration: {self.iteration_count}",
+                f"Model Calls: {self.model_call_count}",
+                f"Tool Calls: {self.tool_call_count}",
+                f"Token Usage: {self.token_usage.total_tokens} total ({self.token_usage.input_tokens} input, {self.token_usage.output_tokens} output)",
+            ]
+            sections.append("## EFFICIENCY\n" + "\n".join(eff_lines))
 
         return "\n\n".join(sections)
 

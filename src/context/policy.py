@@ -145,6 +145,14 @@ class ContextProfile:
             max_attempts=self.max_attempts,
             max_discoveries=self.max_discoveries,
             include_successful_attempts=self.include_successful_attempts,
+            include_failed_attempts=self.include_failed_attempts,
+            include_repeated_failures=self.include_repeated_failures,
+            include_verification=self.include_verification,
+            include_telemetry=self.include_telemetry,
+            include_repository_overview=self.include_repository_overview,
+            include_symbols=self.include_symbols,
+            include_local_imports=self.include_local_imports,
+            repository_scope=self.repository_scope,
             include_raw_output=False,
         )
 
