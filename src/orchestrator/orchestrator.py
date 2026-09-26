@@ -168,6 +168,7 @@ class Orchestrator:
             task_id=task_spec.issue_id,
             task=task_spec.issue_description,
         )
+        self.memory_manager.set_hypothesis(f"Investigating: {task_spec.issue_description}")
 
         step_count = 0
         max_steps = self.config.step_limit
@@ -262,6 +263,7 @@ class Orchestrator:
                     step_count=step_count,
                     task_spec=task_spec,
                     completion_message=decision.message,
+                    last_error=self.last_error,
                     start_time=start_time,
                     tool_call_counts=tool_call_counts,
                     files_inspected=files_inspected,
@@ -398,6 +400,34 @@ class Orchestrator:
 
         return "\n".join(prompt_parts)
 
+    def _build_scratchpad_from_memory(self, task_spec: Optional[TaskSpec] = None) -> ScratchpadState:
+        try:
+            mem_state = self.memory_manager.get_state()
+        except Exception:
+            mem_state = None
+
+        if mem_state is not None:
+            hypothesis = mem_state.current_hypothesis or ""
+            identified = list(mem_state.relevant_files)
+            touched = list(mem_state.touched_files)
+            task_summary = mem_state.task
+            attempt_history = [
+                f"{a.action} -> {'success' if a.success else 'failure'}: {a.result}"
+                for a in mem_state.attempts
+            ]
+            return ScratchpadState(
+                task_summary=task_summary,
+                identified_files=identified,
+                active_hypothesis=hypothesis,
+                files_modified=touched,
+                hypothesis=hypothesis,
+                files_touched=touched,
+                attempt_history=attempt_history,
+            )
+
+        summary = task_spec.issue_description if task_spec else ""
+        return ScratchpadState(task_summary=summary)
+
     def _make_report(
         self,
         status: str,
@@ -413,7 +443,12 @@ class Orchestrator:
         completion_tokens: int = 0,
     ) -> dict:
         wall_time = time.perf_counter() - start_time if start_time > 0 else 0.0
-        sp = self.context.get_scratchpad() if hasattr(self.context, "get_scratchpad") else ScratchpadState()
+        if hasattr(self.context, "get_scratchpad"):
+            sp = self.context.get_scratchpad()
+        else:
+            sp = self._build_scratchpad_from_memory(task_spec)
+
+        effective_last_error = last_error if last_error is not None else self.last_error
 
         telemetry = TelemetryReport(
             total_model_calls=step_count,
@@ -432,7 +467,7 @@ class Orchestrator:
             "status": status,
             "n_calls": step_count,
             "cost": self.cost,
-            "last_error": last_error,
+            "last_error": effective_last_error,
             "message": completion_message or ("Task completed." if status == "completed" else ""),
             "verified": False,
             "scratchpad": sp,
@@ -444,6 +479,8 @@ class Orchestrator:
     # -----------------------------------------------------------------------
 
     def _run_legacy(self, issue: str) -> dict:
+        if self.context is None:
+            self.context = StubContext()
         self.context.update_scratchpad(hypothesis=f"Investigating: {issue}")
 
         while self.n_calls < self.config.step_limit and self.cost < self.config.cost_limit:

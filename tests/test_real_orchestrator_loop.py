@@ -225,6 +225,90 @@ class TestRealOrchestrationLoop(unittest.TestCase):
             self.assertIn("API down HTTP 503", report["last_error"])
             mock_engine.execute.assert_not_called()
 
+    def test_preserve_last_error_when_model_completes_after_tool_failure(self):
+        """Regression: earlier tool failure must be preserved in last_error upon model completion."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            mock_responses = [
+                json.dumps({"tool_name": "read_file", "tool_args": {"path": "nonexistent_file.py"}}),
+                json.dumps({"action": "complete", "message": "Handled nonexistent file gracefully."}),
+            ]
+            adapter = ModelAdapter(mock_mode=True, mock_responses=mock_responses)
+            engine = ToolEngine(workspace_dir=tmp_dir)
+            orch = Orchestrator(model_adapter=adapter, tool_engine=engine)
+
+            report = orch.run(
+                TaskSpec(
+                    issue_id="test-preserve-error",
+                    issue_description="Test preserving last error",
+                    workspace_dir=tmp_dir,
+                )
+            )
+
+            self.assertEqual(report["status"], "completed")
+            self.assertIsNotNone(report["last_error"])
+            self.assertTrue(
+                "does not exist" in report["last_error"].lower()
+                or "not found" in report["last_error"].lower()
+                or "failed" in report["last_error"].lower()
+            )
+
+    def test_no_manufactured_last_error_on_clean_completion(self):
+        """Regression: no error should be manufactured when all steps succeed cleanly."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            (Path(tmp_dir) / "clean.py").write_text("pass\n")
+            mock_responses = [
+                json.dumps({"tool_name": "read_file", "tool_args": {"path": "clean.py"}}),
+                json.dumps({"action": "complete", "message": "All clean."}),
+            ]
+            adapter = ModelAdapter(mock_mode=True, mock_responses=mock_responses)
+            engine = ToolEngine(workspace_dir=tmp_dir)
+            orch = Orchestrator(model_adapter=adapter, tool_engine=engine)
+
+            report = orch.run(
+                TaskSpec(
+                    issue_id="test-clean",
+                    issue_description="Clean run",
+                    workspace_dir=tmp_dir,
+                )
+            )
+
+            self.assertEqual(report["status"], "completed")
+            self.assertIsNone(report["last_error"])
+
+    def test_production_real_loop_does_not_instantiate_stub_context(self):
+        """Regression: production real loop construction and execution must not instantiate StubContext."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            (Path(tmp_dir) / "sample.py").write_text("a = 1\n")
+            mock_responses = [
+                json.dumps({"tool_name": "read_file", "tool_args": {"path": "sample.py"}}),
+                json.dumps({"action": "complete", "message": "done"}),
+            ]
+            adapter = ModelAdapter(mock_mode=True, mock_responses=mock_responses)
+            engine = ToolEngine(workspace_dir=tmp_dir)
+            orch = Orchestrator(model_adapter=adapter, tool_engine=engine)
+
+            # Before running, orch.context must be None
+            self.assertIsNone(orch.context)
+
+            task = TaskSpec(
+                issue_id="test-no-stub-ctx",
+                issue_description="Verify no StubContext",
+                workspace_dir=tmp_dir,
+            )
+            report = orch.run(task)
+
+            # After running, orch.context must STILL be None (StubContext never instantiated)
+            self.assertIsNone(orch.context)
+
+            # Report scratchpad must be populated from MemoryManager authoritative state
+            sp = report["scratchpad"]
+            self.assertIsNotNone(sp)
+            self.assertIn("Verify no StubContext", sp.task_summary)
+            self.assertIn("Verify no StubContext", sp.hypothesis)
+            self.assertIn("sample.py", sp.identified_files)
+            self.assertTrue(len(sp.attempt_history) > 0)
+            self.assertIn("read_file", sp.attempt_history[0])
+
 
 if __name__ == "__main__":
     unittest.main()
