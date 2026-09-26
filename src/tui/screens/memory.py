@@ -29,6 +29,9 @@ class MemoryScreen(Screen):
         super().__init__(**kwargs)
         self.provider = provider
 
+    async def refresh_data(self) -> None:
+        await self.recompose()
+
     def _all_items(self, data: MemoryData) -> list[MemoryItemData]:
         return (
             data.failures +

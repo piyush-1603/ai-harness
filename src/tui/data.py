@@ -17,10 +17,30 @@ class TUIDataProvider:
         memory_manager: MemoryManager,
         diagnostics_engine: Optional[ContextDiagnosticsEngine] = None,
         repository_index: Optional[RepositoryIndex] = None,
+        task_id: Optional[str] = None,
     ):
         self.memory = memory_manager
         self.diagnostics = diagnostics_engine
         self.repo = repository_index
+        self.task_id = task_id
+        self.last_refresh_error: Optional[str] = None
+
+    def refresh(self) -> bool:
+        """Reload state and events from disk. Returns True if successful."""
+        if not self.task_id:
+            return False
+        try:
+            candidate = MemoryManager(
+                storage=self.memory.storage,
+                artifact_store=self.memory.artifact_store,
+            )
+            candidate.load(self.task_id)
+            self.memory = candidate
+            self.last_refresh_error = None
+            return True
+        except Exception as exc:
+            self.last_refresh_error = str(exc)
+            return False
 
     def get_overview_data(self) -> OverviewData:
         state = self.memory.get_state()

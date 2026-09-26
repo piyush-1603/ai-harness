@@ -28,6 +28,9 @@ class ContextScreen(Screen):
         super().__init__(**kwargs)
         self.provider = provider
 
+    async def refresh_data(self) -> None:
+        await self.recompose()
+
     def _candidates(self, data) -> list[ContextCandidateData]:
         if self._filter == "Selected":
             return data.selected_candidates

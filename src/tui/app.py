@@ -14,6 +14,8 @@ from src.context.diagnostics import ContextDiagnosticsEngine
 from src.context.scanner import RepositoryScanner
 from src.tui.data import TUIDataProvider
 
+_REFRESH_INTERVAL = 0.75  # seconds
+
 class HarnessTUI(App):
     """AI Harness Terminal UI."""
 
@@ -25,13 +27,20 @@ class HarnessTUI(App):
         ("3", "switch_screen('memory')", "Memory"),
         ("4", "switch_screen('repository')", "Repository"),
         ("5", "switch_screen('events')", "Events"),
+        ("r", "manual_refresh", "Refresh"),
         ("q", "quit", "Quit"),
         ("?", "help", "Help"),
     ]
 
-    def __init__(self, provider: Optional[TUIDataProvider] = None, **kwargs):
+    def __init__(
+        self,
+        provider: Optional[TUIDataProvider] = None,
+        live: bool = False,
+        **kwargs,
+    ):
         super().__init__(**kwargs)
         self.provider = provider
+        self.live = live  # False in demo mode; True in real-task mode
 
     def on_mount(self) -> None:
         self.install_screen(OverviewScreen(self.provider), "overview")
@@ -41,6 +50,27 @@ class HarnessTUI(App):
         self.install_screen(EventsScreen(self.provider), "events")
 
         self.push_screen("overview")
+
+        if self.live and self.provider:
+            self.set_interval(_REFRESH_INTERVAL, self._poll_refresh)
+
+    async def _poll_refresh(self) -> None:
+        """Called every _REFRESH_INTERVAL seconds."""
+        if not self.provider:
+            return
+        self.provider.refresh()
+        await self._refresh_active_screen()
+
+    async def _refresh_active_screen(self) -> None:
+        screen = self.screen
+        if hasattr(screen, "refresh_data"):
+            await screen.refresh_data()
+
+    async def action_manual_refresh(self) -> None:
+        """r key: same path as poll."""
+        if self.provider:
+            self.provider.refresh()
+        await self._refresh_active_screen()
 
     def action_help(self) -> None:
         pass
@@ -68,18 +98,19 @@ def main():
                 scanner = RepositoryScanner()
                 repo_index = scanner.scan(".")
             except Exception:
-                pass  # Repository index is optional; TUI degrades gracefully
+                pass  # Repository index is optional
 
             provider = TUIDataProvider(
                 memory_manager=memory,
                 diagnostics_engine=engine,
                 repository_index=repo_index,
+                task_id=args.task,
             )
         except Exception:
             print(f"Error: Could not load task '{args.task}'")
             sys.exit(1)
 
-    app = HarnessTUI(provider=provider)
+    app = HarnessTUI(provider=provider, live=bool(args.task))
     app.run()
 
 if __name__ == "__main__":

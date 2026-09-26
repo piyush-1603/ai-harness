@@ -19,6 +19,9 @@ class RepositoryScreen(Screen):
         super().__init__(**kwargs)
         self.provider = provider
 
+    async def refresh_data(self) -> None:
+        await self.recompose()
+
     def compose(self) -> ComposeResult:
         if not self.provider:
             yield from self._compose_demo()
