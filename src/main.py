@@ -3,7 +3,9 @@ import os
 import argparse
 import sys
 from src.orchestrator.orchestrator import Orchestrator
-from src.orchestrator.test_orchestrator import StubToolEngine, StubVerifier, StubModel
+from src.orchestrator.test_orchestrator import StubModel
+from src.tools.registry import ToolEngine
+from src.verification.verifier import VerificationEngine, adapt_verification_report
 from src.memory.manager import MemoryManager
 from src.context.builder import ContextBuilder
 from src.common.types import ScratchpadState
@@ -70,9 +72,27 @@ def main():
     builder = ContextBuilder(repository_index=repo_index)
 
     context = ContextAdapter(memory=memory, builder=builder)
-    tool_engine = StubToolEngine()
-    verifier = StubVerifier(1)
-    model = StubModel()
+    
+    # Wire the real ToolEngine and VerificationEngine
+    tool_engine = ToolEngine(workspace_dir=args.workspace)
+    
+    class VerifierAdapter:
+        def __init__(self, workspace_dir):
+            self.workspace_dir = workspace_dir
+            self.engine = VerificationEngine()
+        def verify(self):
+            report = self.engine.verify(workspace_dir=self.workspace_dir, test_command="pytest")
+            return adapt_verification_report(report)
+            
+    verifier = VerifierAdapter(workspace_dir=args.workspace)
+    
+    # We still use StubModel unless an AI_API_KEY is provided
+    import os
+    if os.environ.get("AI_API_KEY"):
+        from src.orchestrator.model_adapter import ModelAdapter
+        model = ModelAdapter(api_key=os.environ.get("AI_API_KEY"))
+    else:
+        model = StubModel()
     
     from src.orchestrator.orchestrator import OrchestratorConfig
     config = OrchestratorConfig(step_limit=args.max_attempts)

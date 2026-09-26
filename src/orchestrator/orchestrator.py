@@ -93,11 +93,15 @@ class Orchestrator:
             elif self.state == State.TESTING:
                 self._test()
 
-            elif self.state == State.DONE:
+            # Check immediately after testing to avoid loop termination false negatives
+            if self.state == State.DONE:
                 return self._report("resolved")
-
             elif self.state == State.ESCALATE:
                 return self._report("blocked")
+
+        # Check one last time before declaring blocked_step_cap
+        if self.state == State.DONE:
+            return self._report("resolved")
 
         # Ran out of attempts without resolving or explicitly escalating
         self.state = State.ESCALATE
