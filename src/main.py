@@ -135,18 +135,28 @@ def main():
     if test_cmd:
         print(f"Test Command: {test_cmd}")
 
-    if not report.get("verified", False):
-        v_rep = report.get("verification_report")
-        if v_rep and getattr(v_rep, "summary", None):
-            print(f"Verification Summary: {v_rep.summary}")
-        test_out = (report.get("test_output") or "").strip()
-        if test_out:
-            print("Test Output:")
-            print(truncate_output(test_out, max_chars=1000))
-        elif report.get("verification_error"):
-            print(f"Verification Error: {report['verification_error']}")
+    v_rep = report.get("verification_report")
+    if v_rep and getattr(v_rep, "summary", None):
+        print(f"Verification Summary: {v_rep.summary}")
+
+    test_out = (report.get("test_output") or "").strip()
+    if test_out:
+        print("Test Output:")
+        print(truncate_output(test_out, max_chars=1000))
+    elif report.get("verification_error"):
+        print(f"Verification Error: {report['verification_error']}")
+
+    files_mod = report.get("files_modified")
+    if files_mod:
+        print(f"Files Modified: {', '.join(files_mod)}")
+
+    git_diff = (report.get("git_diff") or "").strip()
+    if git_diff:
+        print("Git Diff:")
+        print(truncate_output(git_diff, max_chars=2000))
 
     print(f"Attempts: {report.get('n_calls', 0)}")
+    print(f"Recovery Attempts: {report.get('recovery_attempts', 0)}")
     print(f"Cost: ${report.get('cost', 0.0):.2f}")
     if report.get("last_error"):
         print(f"Last Error: {report['last_error']}")
@@ -155,6 +165,10 @@ def main():
     if scratchpad:
         hypothesis = getattr(scratchpad, "hypothesis", None) or getattr(scratchpad, "active_hypothesis", "")
         print(f"Final Hypothesis: {hypothesis}")
+
+    telemetry = report.get("telemetry")
+    if telemetry and hasattr(telemetry, "to_table"):
+        print("\n" + telemetry.to_table())
 
     if report.get("status") in ("resolved", "completed") and report.get("verified", False):
         sys.exit(0)
