@@ -359,6 +359,51 @@ class TestRealOrchestrationLoop(unittest.TestCase):
             self.assertTrue(len(repeated) >= 1)
             self.assertTrue(any(f.occurrence_count >= 2 for f in repeated))
 
+    def test_m_additional_requirements(self):
+        """TEST M: targeted checks for specific I2 integrations"""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            file_path = Path(tmp_dir) / "mod.py"
+            file_path.write_text("orig\n")
+            
+            mock_responses = [
+                json.dumps({"tool_name": "write_file", "tool_args": {"path": "mod.py", "content": "changed\n"}}),
+                json.dumps({"action": "complete", "message": "done"}),
+                json.dumps({"action": "complete", "message": "done"})
+            ]
+            adapter = ModelAdapter(mock_mode=True, mock_responses=mock_responses)
+            engine = ToolEngine(workspace_dir=tmp_dir)
+            
+            mock_verifier = MagicMock()
+            failed_report = make_failed_report("Target Fail Summary")
+            mock_verifier.verify.side_effect = [failed_report, failed_report]
+            
+            orch = Orchestrator(model_adapter=adapter, tool_engine=engine, verifier=mock_verifier, config=OrchestratorConfig(step_limit=3))
+            
+            original_decide = adapter.decide
+            prompts = []
+            def decide_wrapper(prompt):
+                prompts.append(prompt)
+                return original_decide(prompt)
+            adapter.decide = decide_wrapper
+            
+            task = TaskSpec(
+                issue_id="test-m",
+                issue_description="do stuff",
+                workspace_dir=tmp_dir,
+                test_command="pytest specific_test.py"
+            )
+            report = orch.run(task)
+            
+            self.assertEqual(report["status"], "blocked_step_cap")
+            self.assertEqual(orch.memory_manager.get_state().status, TaskStatus.BLOCKED)
+            
+            self.assertEqual(file_path.read_text(), "changed\n")
+            
+            mock_verifier.verify.assert_called_with(workspace_dir=tmp_dir, test_command="pytest specific_test.py")
+            
+            self.assertTrue(any("Target Fail Summary" in p for p in prompts))
+            self.assertTrue(any("Failed tests." in p for p in prompts))
+            self.assertTrue(any("Classification:" in p for p in prompts))
 
 if __name__ == "__main__":
     unittest.main()

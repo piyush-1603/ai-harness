@@ -57,6 +57,7 @@ from src.memory.adapters import (
     verification_from_report,
     failure_from_verification_report,
 )
+from src.memory.adapters import observation_from_tool_result, attempt_from_tool_result
 from src.orchestrator.model_adapter import (
     ModelAdapter,
     ModelAPIError,
@@ -118,6 +119,7 @@ class Orchestrator:
     ):
         """
         context: object implementing get_scratchpad() / update_scratchpad()
+        tools: object implementing explore(), edit(), verify() (legacy)
         tool_engine: object implementing execute(ToolCall)
         verifier: object implementing verify() -> VerificationResult
         model: object implementing decide(prompt) -> Union[ToolCall, ModelCompletion]
@@ -140,11 +142,12 @@ class Orchestrator:
         self.model_adapter = model_adapter or (model if isinstance(model, ModelAdapter) else ModelAdapter())
 
         # ToolEngine resolution
-        if tool_engine is not None:
+        if tool_engine is not None and hasattr(tool_engine, "execute"):
             self.tool_engine = tool_engine
-        elif isinstance(tools, ToolEngine):
-            self.tool_engine = tools
         elif tools is not None and hasattr(tools, "execute"):
+            self.tool_engine = tools
+        elif tools is not None:
+            # Fallback to tools for legacy tests that pass StubToolEngine
             self.tool_engine = tools
         else:
             workspace_dir = os.environ.get("HARNESS_WORKSPACE_DIR", ".")
@@ -199,10 +202,6 @@ class Orchestrator:
         self.memory_manager.set_phase(Phase.PLAN)
         
         repo_index = RepositoryScanner().scan(task_spec.workspace_dir)
-
-        if self.context is None:
-            self.context = StubContext()
-        self.context.update_scratchpad(hypothesis=f"Investigating: {task_spec.issue_description}")
 
         step_count = 0
         max_steps = self.config.step_limit
@@ -312,14 +311,19 @@ class Orchestrator:
                         self.memory_manager.set_current_errors([verification_report.failure_classification.value])
                     elif verification_report.summary:
                         self.memory_manager.set_current_errors([verification_report.summary])
-                    self.memory_manager.set_phase(Phase.RECOVER)
+                    last_tool_call = ToolCall(call_id="verify", tool_name=ToolName.RUN_BASH, tool_args={"command": "verify"})
                     
-                    last_tool_call = None
+                    # Bounded verification evidence (Point 4)
+                    summary = verification_report.summary or "Verification failed"
+                    classification = verification_report.failure_classification.value if verification_report.failure_classification else "UNKNOWN"
+                    output_excerpt = (verification_report.test_output or "")[:1000]
+                    bounded_output = f"{summary}\nClassification: {classification}\nOutput:\n{output_excerpt}"
+                    
                     last_tool_result = ToolResult(
                         tool_name=ToolName.RUN_BASH,
                         success=False,
-                        output=(verification_report.summary or "") + "\n" + (verification_report.test_output or ""),
-                        error="Verification failed."
+                        output=bounded_output,
+                        error=None,
                     )
                     continue
                 else:
@@ -365,37 +369,28 @@ class Orchestrator:
                                 if hasattr(sp, "files_touched") and arg_path not in sp.files_touched:
                                     sp.files_touched.append(arg_path)
 
-                # Record observation
-                output_summary = (tool_result.output or tool_result.error or "")[:300]
-                self.memory_manager.record_observation(
-                    Observation(
-                        type="tool_result",
-                        source=decision.tool_name.value,
-                        summary=f"{decision.tool_name.value} ({'success' if tool_result.success else 'failed'}): {output_summary}",
-                        raw_output=tool_result.output if tool_result.success else (tool_result.error or tool_result.output),
-                        files=[arg_path] if arg_path else [],
-                    )
+                # Record observation using I1 adapter
+                obs = observation_from_tool_result(
+                    tool_result,
+                    files=[arg_path] if arg_path else [],
                 )
+                self.memory_manager.record_observation(obs)
 
-                # Record attempt
-                self.memory_manager.record_attempt(
-                    Attempt(
-                        id=f"step_{step_count}",
-                        action=f"{decision.tool_name.value}({json.dumps(decision.tool_args, sort_keys=True)})",
-                        success=tool_result.success,
-                        files_touched=[arg_path] if decision.tool_name in (ToolName.EDIT_FILE, ToolName.WRITE_FILE) and arg_path else [],
-                        result=output_summary,
-                    )
+                # Record attempt using I1 adapter
+                action_str = f"{decision.tool_name.value}({json.dumps(decision.tool_args, sort_keys=True)})"
+                attempt = attempt_from_tool_result(
+                    tool_result,
+                    attempt_id=f"step_{step_count}",
+                    action=action_str,
+                    files_touched=[arg_path] if decision.tool_name in (ToolName.EDIT_FILE, ToolName.WRITE_FILE) and arg_path else [],
+                    iteration=step_count,
                 )
+                self.memory_manager.record_attempt(attempt)
                 self.memory_manager.record_tool_call()
-
-                if hasattr(self.context, "update_scratchpad"):
-                    self.context.update_scratchpad(
-                        attempt=f"{decision.tool_name.value} -> {'success' if tool_result.success else 'failure'}: {output_summary}"
-                    )
 
                 if not tool_result.success:
                     self.last_error = tool_result.error or f"Tool {decision.tool_name.value} failed"
+                    output_summary = (tool_result.output or tool_result.error or "")[:300]
                     self.memory_manager.add_failure(
                         Failure(
                             error_signature=f"{decision.tool_name.value}:{tool_result.error or 'failed'}",
@@ -407,6 +402,7 @@ class Orchestrator:
 
         # Exceeded step limit without completion
         self.state = State.ESCALATE
+        self.memory_manager.set_status(TaskStatus.BLOCKED)
         return self._make_report(
             status="blocked_step_cap",
             step_count=step_count,
