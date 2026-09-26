@@ -1,6 +1,7 @@
 VENV ?= .venv
 PYTHON ?= $(if $(wildcard $(VENV)/bin/python),$(VENV)/bin/python,python3)
 PYTEST ?= $(if $(wildcard $(VENV)/bin/pytest),$(VENV)/bin/pytest,pytest)
+ISSUE ?= Fix the reported issue
 
 .PHONY: setup run test install
 
