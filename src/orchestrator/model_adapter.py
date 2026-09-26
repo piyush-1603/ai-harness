@@ -1,19 +1,301 @@
-import os
+"""ModelAdapter module for Track A.
+
+Manages communication with foundation models via OpenAI-compatible endpoints,
+enforces API key security, supports deterministic offline mock mode, and
+parses model responses into strongly-typed canonical ToolCall objects or
+ModelCompletion decisions.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+import json
 import logging
-from typing import List, Dict
+import os
+import re
+import socket
+from typing import Any, Dict, List, Optional, Union
+import urllib.error
+import urllib.request
+import uuid
+
+from src.common.types import ToolCall, ToolName
+
+logger = logging.getLogger(__name__)
+
+
+class ModelAPIError(Exception):
+    """Raised when an API call fails or encounters HTTP/connection errors."""
+    pass
+
+
+class ModelParseError(Exception):
+    """Raised when model output cannot be parsed into a valid ToolCall or ModelCompletion."""
+    pass
+
+
+@dataclass
+class ModelCompletion:
+    """Represents a completion / final answer decision from the model."""
+    message: str
+
 
 class ModelAdapter:
-    def __init__(self):
-        self.api_key = os.environ.get("AI_API_KEY")
-        self.model = os.environ.get("AI_MODEL", "default-model")
-        self.harness_env = {k: v for k, v in os.environ.items() if k.startswith("HARNESS_")}
-        
-        if not self.api_key:
-            logging.warning("AI_API_KEY environment variable is not set. Model calls will fail.")
-            
+    """
+    Adapter for foundation model communication.
+    
+    In production mode:
+      - Reads AI_API_KEY, AI_MODEL, AI_BASE_URL.
+      - Dispatches requests via standard library urllib.request to OpenAI-compatible endpoint.
+      - Never leaks credentials in logs or exceptions.
+      - Handles network/HTTP/rate-limit errors explicitly without silent fallback.
+
+    In mock mode:
+      - Explicitly enabled via `mock_mode=True`.
+      - Yields deterministic pre-configured responses for unit and integration testing.
+    """
+
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        model: Optional[str] = None,
+        base_url: Optional[str] = None,
+        timeout: float = 60.0,
+        mock_mode: bool = False,
+        mock_responses: Optional[List[str]] = None,
+    ) -> None:
+        self.mock_mode = mock_mode
+        self._mock_responses: List[str] = list(mock_responses or [])
+        self._mock_index = 0
+        self.timeout = float(timeout)
+
+        if not self.mock_mode:
+            self.api_key = api_key or os.environ.get("AI_API_KEY")
+            self.model = model or os.environ.get("AI_MODEL", "gpt-4o-mini")
+            raw_base = base_url if base_url is not None else os.environ.get("AI_BASE_URL", "")
+            self.base_url = raw_base.strip()
+            if not self.api_key:
+                logger.warning("AI_API_KEY is not set. Production model calls will fail.")
+        else:
+            self.api_key = api_key or "mock-key"
+            self.model = model or "mock-model"
+            self.base_url = ""
+
+        self.last_token_usage: Dict[str, int] = {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+        }
+        self.total_model_calls: int = 0
+
+    def set_mock_responses(self, responses: List[str]) -> None:
+        """Sets or resets the mock response queue for mock mode."""
+        self._mock_responses = list(responses)
+        self._mock_index = 0
+
     def call_model(self, prompt: str) -> str:
+        """Sends prompt to the model and returns the raw response string."""
+        if self.mock_mode:
+            if self._mock_index >= len(self._mock_responses):
+                raise ModelAPIError("Mock responses exhausted: no more responses configured.")
+            response = self._mock_responses[self._mock_index]
+            self._mock_index += 1
+            self.total_model_calls += 1
+            return response
+
         if not self.api_key:
-            return "STUB_RESPONSE: Please provide an API key."
-            
-        # Placeholder for actual model call (e.g., using litellm or another provider)
-        return f"Response from {self.model} for prompt: {prompt[:50]}..."
+            raise ModelAPIError("AI_API_KEY is not set. An API key is required in production mode.")
+
+        endpoint = (
+            f"{self.base_url.rstrip('/')}/chat/completions"
+            if self.base_url
+            else "https://api.openai.com/v1/chat/completions"
+        )
+
+        payload = {
+            "model": self.model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.0,
+        }
+        data = json.dumps(payload).encode("utf-8")
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.api_key}",
+        }
+
+        req = urllib.request.Request(endpoint, data=data, headers=headers, method="POST")
+
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout) as response:
+                body = response.read().decode("utf-8")
+        except urllib.error.HTTPError as e:
+            status = e.code
+            try:
+                e.close()
+            except Exception:
+                pass
+            if status in (401, 403):
+                raise ModelAPIError("Authentication failed: invalid or unauthorized API key (HTTP 401/403)") from None
+            elif status == 429:
+                raise ModelAPIError("Rate limit exceeded (HTTP 429)") from None
+            elif status >= 500:
+                raise ModelAPIError(f"Model server error (HTTP {status})") from None
+            else:
+                raise ModelAPIError(f"Model API error (HTTP {status})") from None
+        except (urllib.error.URLError, TimeoutError, socket.timeout) as e:
+            raise ModelAPIError(f"Connection failure to model endpoint: {type(e).__name__}") from None
+        except Exception as e:
+            raise ModelAPIError(f"Unexpected error communicating with model: {type(e).__name__}") from None
+
+        try:
+            res_json = json.loads(body)
+        except json.JSONDecodeError as e:
+            raise ModelAPIError(f"Malformed JSON in model API response: {e.msg}") from e
+
+        if not isinstance(res_json, dict):
+            raise ModelAPIError(f"Unexpected API response structure: expected JSON object, got {type(res_json).__name__}")
+
+        choices = res_json.get("choices")
+        if not choices or not isinstance(choices, list):
+            raise ModelAPIError("Missing or invalid 'choices' in API response")
+
+        first_choice = choices[0]
+        if not isinstance(first_choice, dict) or "message" not in first_choice:
+            raise ModelAPIError("Missing 'message' in API response choice")
+
+        msg = first_choice["message"]
+        if not isinstance(msg, dict) or "content" not in msg:
+            raise ModelAPIError("Missing 'content' in API response message")
+
+        content = msg["content"]
+        if content is None:
+            raise ModelAPIError("Null 'content' in API response message")
+
+        usage = res_json.get("usage", {})
+        if isinstance(usage, dict):
+            self.last_token_usage = {
+                "prompt_tokens": int(usage.get("prompt_tokens", 0) or 0),
+                "completion_tokens": int(usage.get("completion_tokens", 0) or 0),
+                "total_tokens": int(usage.get("total_tokens", 0) or 0),
+            }
+
+        self.total_model_calls += 1
+        return str(content)
+
+    @classmethod
+    def parse_decision(cls, raw_text: str) -> Union[ToolCall, ModelCompletion]:
+        """
+        Parses raw model output into either a canonical ToolCall or ModelCompletion.
+        
+        Strict parsing rules:
+        - Must contain valid JSON (either bare or within ```json ... ```).
+        - If multiple ambiguous JSON blocks or tool calls are detected, raises ModelParseError.
+        - Completion must have "action": "complete", "status": "completed", "completed": true,
+          or "tool_name": "complete".
+        - Tool call must have valid "tool_name" belonging to canonical ToolName enum,
+          and "tool_args" must be a dictionary.
+        """
+        if not raw_text or not raw_text.strip():
+            raise ModelParseError("Empty response from model.")
+
+        text = raw_text.strip()
+
+        # Check for markdown code blocks containing json
+        code_block_pattern = re.compile(r"```(?:json)?\s*([\s\S]*?)\s*```", re.IGNORECASE)
+        code_blocks = code_block_pattern.findall(text)
+
+        candidate_json_strs: List[str] = []
+        if code_blocks:
+            for cb in code_blocks:
+                stripped_cb = cb.strip()
+                if stripped_cb:
+                    candidate_json_strs.append(stripped_cb)
+            if len(candidate_json_strs) > 1:
+                raise ModelParseError("Ambiguous response: multiple JSON blocks detected in response.")
+
+        if candidate_json_strs:
+            target_str = candidate_json_strs[0]
+        else:
+            target_str = text
+
+        # If it starts with '[', it's a list/array
+        if target_str.startswith("["):
+            raise ModelParseError("Unexpected response structure: expected JSON object, got list.")
+
+        # Find first '{'
+        start = target_str.find("{")
+        if start == -1:
+            raise ModelParseError("No valid JSON object found in model response.")
+
+        end = target_str.rfind("}")
+        if end == -1 or end < start:
+            raise ModelParseError("Malformed JSON in model response: unclosed '{'.")
+
+        # Check if there are multiple separated top-level JSON objects
+        if re.search(r"\}\s*\{", target_str[start : end + 1]):
+            raise ModelParseError("Ambiguous response: multiple tool calls detected.")
+
+        json_str = target_str[start : end + 1]
+
+        try:
+            data = json.loads(json_str)
+        except json.JSONDecodeError as e:
+            raise ModelParseError(f"Malformed JSON in model response: {e.msg}") from e
+
+        if not isinstance(data, dict):
+            raise ModelParseError(f"Unexpected response structure: expected JSON object, got {type(data).__name__}.")
+
+        # Check for completion signals
+        is_completion = False
+        completion_msg = ""
+
+        if data.get("action") in ("complete", "finish", "done"):
+            is_completion = True
+            completion_msg = str(data.get("message") or "Task completed.")
+        elif data.get("status") in ("completed", "done", "finished"):
+            is_completion = True
+            completion_msg = str(data.get("message") or "Task completed.")
+        elif data.get("completed") is True:
+            is_completion = True
+            completion_msg = str(data.get("message") or "Task completed.")
+        elif str(data.get("tool_name", "")).strip().lower() in ("complete", "finish"):
+            is_completion = True
+            tool_args = data.get("tool_args") or {}
+            completion_msg = str(
+                data.get("message")
+                or (tool_args.get("message") if isinstance(tool_args, dict) else None)
+                or "Task completed."
+            )
+
+        if is_completion:
+            return ModelCompletion(message=completion_msg)
+
+        # Must be a tool call
+        if "tool_name" not in data:
+            raise ModelParseError("Missing 'tool_name' in model response.")
+
+        raw_name = data["tool_name"]
+        if not isinstance(raw_name, str):
+            raise ModelParseError(f"Invalid 'tool_name' type: expected string, got {type(raw_name).__name__}.")
+
+        try:
+            canonical_tool = ToolName(raw_name.strip().lower())
+        except ValueError:
+            raise ModelParseError(f"Unknown tool name: '{raw_name}'.")
+
+        if "tool_args" not in data:
+            raise ModelParseError(f"Missing 'tool_args' for tool '{canonical_tool.value}'.")
+
+        args = data["tool_args"]
+        if not isinstance(args, dict):
+            raise ModelParseError(
+                f"Invalid 'tool_args' for tool '{canonical_tool.value}': expected dictionary, got {type(args).__name__}."
+            )
+
+        call_id = str(data.get("call_id") or f"call_{uuid.uuid4().hex[:8]}")
+        return ToolCall(tool_name=canonical_tool, tool_args=args, call_id=call_id)
+
+    def decide(self, prompt: str) -> Union[ToolCall, ModelCompletion]:
+        """Calls the model and returns a validated ToolCall or ModelCompletion."""
+        raw_text = self.call_model(prompt)
+        return self.parse_decision(raw_text)
