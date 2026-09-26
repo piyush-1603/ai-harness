@@ -12,6 +12,8 @@ everyone codes to the same contract below.
 """
 
 from dataclasses import dataclass, field
+from src.common.types import ToolResult, ScratchpadState, VerificationResult
+
 from enum import Enum, auto
 from typing import Optional
 
@@ -36,26 +38,6 @@ except ImportError:
 # B and C before anyone writes their real implementation.
 # ---------------------------------------------------------------------------
 
-@dataclass
-class ToolResult:
-    success: bool
-    output: str
-    error: Optional[str] = None
-
-
-@dataclass
-class ScratchpadState:
-    hypothesis: str = ""
-    files_touched: list = field(default_factory=list)
-    attempt_history: list = field(default_factory=list)
-
-
-@dataclass
-class VerificationResult:
-    passed: bool
-    failing_tests: list = field(default_factory=list)
-    stdout: str = ""
-    stderr: str = ""
 
 
 # ---------------------------------------------------------------------------

@@ -1,0 +1,3 @@
+pydantic
+jinja2
+pytest
