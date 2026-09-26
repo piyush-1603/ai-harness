@@ -520,6 +520,8 @@ class TestModelAdapterHTTP(unittest.TestCase):
             with self.assertRaises(ModelAPIError) as cm:
                 adapter.call_model("prompt")
             self.assertIn("Rate limit exceeded (HTTP 429)", str(cm.exception))
+            self.assertTrue(cm.exception.is_rate_limit)
+            self.assertEqual(cm.exception.status_code, 429)
 
     def test_http_500_server_error(self):
         http_err = urllib.error.HTTPError(

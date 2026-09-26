@@ -26,7 +26,11 @@ logger = logging.getLogger(__name__)
 
 class ModelAPIError(Exception):
     """Raised when an API call fails or encounters HTTP/connection errors."""
-    pass
+
+    def __init__(self, message: str, status_code: Optional[int] = None):
+        super().__init__(message)
+        self.status_code = status_code
+        self.is_rate_limit = status_code == 429 or "429" in message or "rate limit" in message.lower()
 
 
 class ModelParseError(Exception):
@@ -135,13 +139,13 @@ class ModelAdapter:
             except Exception:
                 pass
             if status in (401, 403):
-                raise ModelAPIError("Authentication failed: invalid or unauthorized API key (HTTP 401/403)") from None
+                raise ModelAPIError("Authentication failed: invalid or unauthorized API key (HTTP 401/403)", status_code=status) from None
             elif status == 429:
-                raise ModelAPIError("Rate limit exceeded (HTTP 429)") from None
+                raise ModelAPIError("Rate limit exceeded (HTTP 429)", status_code=429) from None
             elif status >= 500:
-                raise ModelAPIError(f"Model server error (HTTP {status})") from None
+                raise ModelAPIError(f"Model server error (HTTP {status})", status_code=status) from None
             else:
-                raise ModelAPIError(f"Model API error (HTTP {status})") from None
+                raise ModelAPIError(f"Model API error (HTTP {status})", status_code=status) from None
         except (urllib.error.URLError, TimeoutError, socket.timeout) as e:
             raise ModelAPIError(f"Connection failure to model endpoint: {type(e).__name__}") from None
         except Exception as e:

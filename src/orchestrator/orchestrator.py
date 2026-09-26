@@ -254,6 +254,47 @@ class Orchestrator:
             try:
                 decision = self.model_adapter.decide(turn_prompt)
             except ModelAPIError as e:
+                is_rate_limit = (
+                    getattr(e, "is_rate_limit", False)
+                    or "429" in str(e)
+                    or "rate limit" in str(e).lower()
+                )
+                if is_rate_limit:
+                    self.last_error = str(e)
+                    self.memory_manager.record_observation(
+                        Observation(
+                            type="error",
+                            source="model_adapter",
+                            summary=f"ModelAPIError: {e}",
+                        )
+                    )
+                    self.memory_manager.add_failure(
+                        Failure(
+                            error_signature=FailureClassification.RATE_LIMIT.value,
+                            summary=str(e),
+                            action="model_call",
+                        )
+                    )
+                    self.memory_manager.set_status(TaskStatus.FAILED)
+                    self.memory_manager.set_current_errors([str(e)])
+                    return self._make_report(
+                        status="error",
+                        step_count=step_count,
+                        task_spec=task_spec,
+                        last_error=self.last_error,
+                        verified=False,
+                        verification_report=latest_verification_report,
+                        verification_error=latest_verification_error,
+                        failure_classification=FailureClassification.RATE_LIMIT,
+                        start_time=start_time,
+                        tool_call_counts=tool_call_counts,
+                        files_inspected=files_inspected,
+                        files_modified=files_modified,
+                        prompt_tokens=prompt_tokens_accum,
+                        completion_tokens=completion_tokens_accum,
+                        recovery_attempts=recovery_count,
+                    )
+
                 # If mock responses are exhausted during recovery, terminate cleanly as failed
                 if (
                     latest_verification_report is not None
@@ -710,6 +751,7 @@ class Orchestrator:
         prompt_tokens: int = 0,
         completion_tokens: int = 0,
         recovery_attempts: int = 0,
+        failure_classification: Optional[Union[FailureClassification, str]] = None,
     ) -> dict:
         wall_time = time.perf_counter() - start_time if start_time > 0 else 0.0
         if hasattr(self.context, "get_scratchpad"):
@@ -728,6 +770,20 @@ class Orchestrator:
                     merged_files_modified.append(f)
 
         effective_recovery_attempts = recovery_attempts or len(getattr(sp, "history_attempts", []))
+
+        effective_failure_classification = None
+        if failure_classification is not None:
+            effective_failure_classification = (
+                failure_classification.value
+                if hasattr(failure_classification, "value")
+                else str(failure_classification)
+            )
+        elif verification_report and verification_report.failure_classification:
+            effective_failure_classification = verification_report.failure_classification.value
+        elif effective_last_error and (
+            "429" in effective_last_error or "rate limit" in effective_last_error.lower()
+        ):
+            effective_failure_classification = FailureClassification.RATE_LIMIT.value
 
         telemetry = TelemetryReport(
             total_model_calls=step_count,
@@ -755,11 +811,7 @@ class Orchestrator:
             "test_output": verification_report.test_output if verification_report else "",
             "git_diff": verification_report.git_diff if verification_report else "",
             "verification_status": verification_report.status.value if verification_report else None,
-            "failure_classification": (
-                verification_report.failure_classification.value
-                if verification_report and verification_report.failure_classification
-                else None
-            ),
+            "failure_classification": effective_failure_classification,
             "files_modified": merged_files_modified,
             "recovery_attempts": effective_recovery_attempts,
             "scratchpad": sp,
@@ -810,7 +862,12 @@ class Orchestrator:
             last_observation=last_obs,
             recovery_hint=hint
         )
-        decision = self.model.decide(prompt)
+        try:
+            decision = self.model.decide(prompt)
+        except ModelAPIError as e:
+            self.last_error = str(e)
+            self.state = State.ESCALATE
+            return
         
         if isinstance(decision, ModelCompletion):
             if self.state == State.EXPLORING:
@@ -847,10 +904,15 @@ class Orchestrator:
             self.state = State.ESCALATE
 
     def _report(self, status: str) -> dict:
+        fc = None
+        err = self.last_error or self.recovery_manager.last_error_signature
+        if err and ("429" in err or "rate limit" in err.lower()):
+            fc = FailureClassification.RATE_LIMIT.value
         return {
             "status": status,
             "n_calls": self.n_calls,
             "cost": self.cost,
-            "last_error": self.recovery_manager.last_error_signature,
+            "last_error": err,
             "scratchpad": self.context.get_scratchpad(),
+            "failure_classification": fc,
         }
