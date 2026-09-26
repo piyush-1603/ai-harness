@@ -28,6 +28,10 @@ NOISE_DIRS: Set[str] = {
     ".harness_state",
 }
 
+NOISE_FILES: Set[str] = {
+    ".DS_Store",
+}
+
 MAX_GREP_MATCHES = 100
 
 
@@ -92,19 +96,10 @@ def grep_search(
     matches: List[str] = []
     total_found = 0
 
-    if target_path.is_file():
-        files_to_search = [target_path]
-    else:
-        files_to_search = []
-        for root, dirs, files in os.walk(target_path):
-            dirs[:] = [d for d in dirs if d not in NOISE_DIRS]
-            for file_name in sorted(files):
-                file_path = Path(root) / file_name
-                files_to_search.append(file_path)
-
-    for file_path in files_to_search:
+    def _search_file(file_path: Path):
+        nonlocal total_found
         if _is_binary_file(file_path):
-            continue
+            return
 
         try:
             rel_path = file_path.relative_to(ws_path)
@@ -114,7 +109,7 @@ def grep_search(
         try:
             content = file_path.read_text(encoding="utf-8", errors="replace")
         except Exception:
-            continue
+            return
 
         for line_idx, line in enumerate(content.splitlines(), start=1):
             if pattern.search(line):
@@ -122,9 +117,30 @@ def grep_search(
                 if len(matches) < max_matches:
                     clean_line = line.strip()
                     matches.append(f"{rel_path}:{line_idx}: {clean_line}")
+                if len(matches) >= max_matches:
+                    break
 
-        if len(matches) >= max_matches:
-            break
+    if target_path.is_file():
+        if target_path.name not in NOISE_FILES:
+            _search_file(target_path)
+    else:
+        for root, dirs, files in os.walk(target_path):
+            # Prune noise directories in-place before traversing
+            dirs[:] = [d for d in dirs if d not in NOISE_DIRS]
+            # Deterministically order subdirectories in-place
+            dirs.sort()
+
+            # Deterministically process sorted filenames
+            for file_name in sorted(files):
+                if file_name in NOISE_FILES:
+                    continue
+                file_path = Path(root) / file_name
+                _search_file(file_path)
+                if len(matches) >= max_matches:
+                    break
+
+            if len(matches) >= max_matches:
+                break
 
     duration = time.perf_counter() - start_time
     if not matches:
@@ -207,7 +223,7 @@ def list_directory(
     lines.append(f"Directory listing of {rel_display}:")
 
     for entry in entries:
-        if entry.name in NOISE_DIRS:
+        if entry.name in NOISE_DIRS or entry.name in NOISE_FILES:
             continue
         if entry.is_dir():
             lines.append(f"  [DIR]  {entry.name}/")

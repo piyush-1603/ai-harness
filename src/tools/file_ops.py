@@ -8,8 +8,9 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Optional, Union
+import tempfile
 import time
+from typing import Optional, Union
 
 from src.common.types import ToolName, ToolResult
 
@@ -128,8 +129,16 @@ def read_file(
             duration_sec=time.perf_counter() - start_time,
         )
 
+    if start_line > total_lines:
+        return ToolResult(
+            tool_name=ToolName.READ_FILE,
+            success=True,
+            output=f"<start_line {start_line} is beyond end of file ({total_lines} total lines)>",
+            duration_sec=time.perf_counter() - start_time,
+        )
+
     actual_end = total_lines if (end_line == -1 or end_line > total_lines) else end_line
-    actual_start = min(start_line, total_lines)
+    actual_start = start_line
 
     selected_lines = lines[actual_start - 1 : actual_end]
     formatted = "\n".join(
@@ -229,9 +238,28 @@ def edit_file(
 
     new_content = content.replace(search_block, replace_block, 1)
 
+    temp_file: Optional[Path] = None
     try:
-        target_path.write_text(new_content, encoding="utf-8")
+        # Create temporary file in target_path.parent to ensure same filesystem for atomic os.replace
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=target_path.parent,
+            prefix=f".{target_path.name}.tmp_",
+            delete=False,
+        ) as tf:
+            temp_file = Path(tf.name)
+            tf.write(new_content)
+            tf.flush()
+            os.fsync(tf.fileno())
+
+        os.replace(temp_file, target_path)
     except Exception as e:
+        if temp_file is not None and temp_file.exists():
+            try:
+                temp_file.unlink()
+            except OSError:
+                pass
         return ToolResult(
             tool_name=ToolName.EDIT_FILE,
             success=False,

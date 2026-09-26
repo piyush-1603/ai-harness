@@ -170,6 +170,40 @@ class TestFileOps(unittest.TestCase):
             self.assertFalse(res.success)
             self.assertIn("Path traversal detected", res.error)
 
+    def test_read_file_beyond_eof(self):
+        sample = self.ws / "short.txt"
+        sample.write_text("line 1\nline 2\nline 3\n", encoding="utf-8")
+
+        # Beyond EOF request
+        res = read_file("short.txt", start_line=20, end_line=30, workspace_dir=str(self.ws))
+        self.assertTrue(res.success)
+        self.assertEqual(res.tool_name, ToolName.READ_FILE)
+        self.assertEqual(res.output, "<start_line 20 is beyond end of file (3 total lines)>")
+
+        # Normal valid request remains unchanged
+        res_normal = read_file("short.txt", start_line=1, end_line=2, workspace_dir=str(self.ws))
+        self.assertTrue(res_normal.success)
+        self.assertIn("line 1", res_normal.output)
+        self.assertIn("line 2", res_normal.output)
+        self.assertNotIn("line 3", res_normal.output)
+
+    def test_atomic_edit_file_write(self):
+        target = self.ws / "atomic.txt"
+        target.write_text("alpha beta gamma\n", encoding="utf-8")
+
+        res = edit_file(
+            path="atomic.txt",
+            search_block="beta",
+            replace_block="omega",
+            workspace_dir=str(self.ws),
+        )
+        self.assertTrue(res.success)
+        self.assertEqual(target.read_text(), "alpha omega gamma\n")
+
+        # Ensure no temporary artifacts (.tmp_) are left behind in target parent
+        temp_artifacts = list(self.ws.glob(".*.tmp_*"))
+        self.assertEqual(len(temp_artifacts), 0)
+
 
 class TestShellOps(unittest.TestCase):
     def setUp(self):
@@ -275,6 +309,65 @@ class TestSearchOps(unittest.TestCase):
         self.assertIn("[DIR]  src/", res.output)
         self.assertNotIn(".venv", res.output)
         self.assertNotIn(".git", res.output)
+
+    def test_ds_store_noise_filtering(self):
+        ds_store = self.ws / ".DS_Store"
+        ds_store.write_text("calculate_tax inside ds_store")
+        nested_ds = self.ws / "src" / ".DS_Store"
+        nested_ds.write_text("calculate_tax inside nested ds_store")
+
+        # list_directory must not list .DS_Store
+        list_res = list_directory(path=".", workspace_dir=str(self.ws))
+        self.assertTrue(list_res.success)
+        self.assertNotIn(".DS_Store", list_res.output)
+
+        # grep_search must not match .DS_Store
+        grep_res = grep_search(query="inside ds_store", workspace_dir=str(self.ws))
+        self.assertTrue(grep_res.success)
+        self.assertIn("No matches found", grep_res.output)
+
+    def test_grep_streaming_and_early_termination(self):
+        for i in range(5):
+            (self.ws / f"match_{i}.txt").write_text(f"target_key = {i}\n")
+
+        res = grep_search(query="target_key", max_matches=2, workspace_dir=str(self.ws))
+        self.assertTrue(res.success)
+        lines = [line for line in res.output.splitlines() if "target_key" in line]
+        self.assertEqual(len(lines), 2)
+        # Matches come only from the first two deterministically sorted files
+        self.assertIn("match_0.txt", res.output)
+        self.assertIn("match_1.txt", res.output)
+        # Early termination ensures remaining files are not included
+        self.assertNotIn("match_2.txt", res.output)
+        self.assertNotIn("match_3.txt", res.output)
+        self.assertNotIn("match_4.txt", res.output)
+
+    def test_grep_recursive_search(self):
+        nested = self.ws / "level1" / "level2"
+        nested.mkdir(parents=True)
+        (nested / "deep.py").write_text("def nested_function():\n    return 42\n")
+
+        res = grep_search(query="nested_function", workspace_dir=str(self.ws))
+        self.assertTrue(res.success)
+        self.assertIn("level1/level2/deep.py:1: def nested_function():", res.output)
+
+    def test_grep_deterministic_directory_ordering(self):
+        (self.ws / "z_dir").mkdir()
+        (self.ws / "z_dir" / "file.py").write_text("common_token = 1\n")
+
+        (self.ws / "a_dir").mkdir()
+        (self.ws / "a_dir" / "file.py").write_text("common_token = 2\n")
+
+        (self.ws / "m_dir").mkdir()
+        (self.ws / "m_dir" / "file.py").write_text("common_token = 3\n")
+
+        res = grep_search(query="common_token", workspace_dir=str(self.ws))
+        self.assertTrue(res.success)
+        lines = [line for line in res.output.splitlines() if "common_token" in line]
+        # Should deterministically be a_dir first, then m_dir, then z_dir
+        self.assertTrue(lines[0].startswith("a_dir/"))
+        self.assertTrue(lines[1].startswith("m_dir/"))
+        self.assertTrue(lines[2].startswith("z_dir/"))
 
 
 class TestGitTools(unittest.TestCase):
