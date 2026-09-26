@@ -9,6 +9,7 @@ ModelCompletion decisions.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
 import json
 import logging
 import os
@@ -17,7 +18,6 @@ import socket
 from typing import Any, Dict, List, Optional, Union
 import urllib.error
 import urllib.request
-import uuid
 
 from src.common.types import ToolCall, ToolName
 
@@ -219,10 +219,10 @@ class ModelAdapter:
             target_str = text
 
         # If it starts with '[', it's a list/array
-        if target_str.startswith("["):
+        if target_str.lstrip().startswith("["):
             raise ModelParseError("Unexpected response structure: expected JSON object, got list.")
 
-        # Find first '{'
+        # Find first '{' and last '}'
         start = target_str.find("{")
         if start == -1:
             raise ModelParseError("No valid JSON object found in model response.")
@@ -231,43 +231,58 @@ class ModelAdapter:
         if end == -1 or end < start:
             raise ModelParseError("Malformed JSON in model response: unclosed '{'.")
 
-        # Check if there are multiple separated top-level JSON objects
-        if re.search(r"\}\s*\{", target_str[start : end + 1]):
+        if target_str[:start].find("}") != -1:
+            raise ModelParseError("Malformed JSON in model response: unexpected '}' before '{'.")
+
+        if target_str[end + 1:].find("{") != -1:
             raise ModelParseError("Ambiguous response: multiple tool calls detected.")
 
         json_str = target_str[start : end + 1]
 
+        # 1. Attempt normal json.loads parsing first.
+        # If the candidate is valid JSON representing exactly one root object,
+        # we accept it without running raw-text regex ambiguity heuristics on string contents.
         try:
             data = json.loads(json_str)
         except json.JSONDecodeError as e:
+            # Check if failure is due to multiple top-level JSON objects
+            try:
+                decoder = json.JSONDecoder()
+                _, first_end = decoder.raw_decode(json_str)
+                remaining = json_str[first_end:].strip()
+                if "{" in remaining:
+                    raise ModelParseError("Ambiguous response: multiple tool calls detected.")
+            except ModelParseError:
+                raise
+            except Exception:
+                pass
             raise ModelParseError(f"Malformed JSON in model response: {e.msg}") from e
 
         if not isinstance(data, dict):
             raise ModelParseError(f"Unexpected response structure: expected JSON object, got {type(data).__name__}.")
 
         # Check for completion signals
-        is_completion = False
-        completion_msg = ""
+        has_completion_action = (
+            data.get("action") in ("complete", "finish", "done")
+            or data.get("status") in ("completed", "done", "finished")
+            or data.get("completed") is True
+        )
+        tool_name_raw = data.get("tool_name")
+        tool_name_val = str(tool_name_raw).strip().lower() if tool_name_raw is not None else ""
+        has_tool_name_complete = tool_name_val in ("complete", "finish")
+        has_other_tool_name = bool(tool_name_val and not has_tool_name_complete)
 
-        if data.get("action") in ("complete", "finish", "done"):
-            is_completion = True
-            completion_msg = str(data.get("message") or "Task completed.")
-        elif data.get("status") in ("completed", "done", "finished"):
-            is_completion = True
-            completion_msg = str(data.get("message") or "Task completed.")
-        elif data.get("completed") is True:
-            is_completion = True
-            completion_msg = str(data.get("message") or "Task completed.")
-        elif str(data.get("tool_name", "")).strip().lower() in ("complete", "finish"):
-            is_completion = True
+        # M-1: Reject contradictory completion + tool signals
+        if has_completion_action and has_other_tool_name:
+            raise ModelParseError("Contradictory response: contains both completion signal and tool_name.")
+
+        if has_completion_action or has_tool_name_complete:
             tool_args = data.get("tool_args") or {}
             completion_msg = str(
                 data.get("message")
                 or (tool_args.get("message") if isinstance(tool_args, dict) else None)
                 or "Task completed."
             )
-
-        if is_completion:
             return ModelCompletion(message=completion_msg)
 
         # Must be a tool call
@@ -292,7 +307,15 @@ class ModelAdapter:
                 f"Invalid 'tool_args' for tool '{canonical_tool.value}': expected dictionary, got {type(args).__name__}."
             )
 
-        call_id = str(data.get("call_id") or f"call_{uuid.uuid4().hex[:8]}")
+        # H-2: Deterministic call_id derived from tool_name and tool_args
+        if data.get("call_id"):
+            call_id = str(data["call_id"])
+        else:
+            args_repr = json.dumps(args, sort_keys=True, separators=(",", ":"))
+            content_sig = f"{canonical_tool.value}:{args_repr}"
+            digest = hashlib.sha256(content_sig.encode("utf-8")).hexdigest()[:12]
+            call_id = f"call_{digest}"
+
         return ToolCall(tool_name=canonical_tool, tool_args=args, call_id=call_id)
 
     def decide(self, prompt: str) -> Union[ToolCall, ModelCompletion]:

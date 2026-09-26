@@ -11,6 +11,7 @@ Verifies:
 
 from io import BytesIO
 import json
+import socket
 import unittest
 from unittest.mock import MagicMock, patch
 import urllib.error
@@ -158,6 +159,68 @@ and then:
         with self.assertRaises(ModelParseError) as cm:
             ModelAdapter.parse_decision(raw)
         self.assertIn("Ambiguous response", str(cm.exception))
+
+    def test_valid_tool_call_with_braces_in_string_values(self):
+        # H-1: braces in string values must not trigger false ambiguity error
+        raw = json.dumps({
+            "tool_name": "edit_file",
+            "tool_args": {
+                "path": "calc.py",
+                "old_str": "x = {} {}"
+            }
+        })
+        decision = ModelAdapter.parse_decision(raw)
+        self.assertIsInstance(decision, ToolCall)
+        self.assertEqual(decision.tool_name, ToolName.EDIT_FILE)
+        self.assertEqual(decision.tool_args, {"path": "calc.py", "old_str": "x = {} {}"})
+
+    def test_ambiguous_multiple_tool_calls_whitespace_separated(self):
+        # H-1: genuine multiple tool-call response must be rejected with ModelParseError
+        raw = """
+        {"tool_name": "read_file", "tool_args": {"path": "a.py"}}
+        {"tool_name": "edit_file", "tool_args": {"path": "b.py"}}
+        """
+        with self.assertRaises(ModelParseError) as cm:
+            ModelAdapter.parse_decision(raw)
+        self.assertIn("Ambiguous response", str(cm.exception))
+
+    def test_call_id_deterministic_without_call_id(self):
+        # H-2: parse_decision(raw_without_call_id) == parse_decision(raw_without_call_id)
+        raw = '{"tool_name": "read_file", "tool_args": {"path": "calculator.py"}}'
+        d1 = ModelAdapter.parse_decision(raw)
+        d2 = ModelAdapter.parse_decision(raw)
+        self.assertIsInstance(d1, ToolCall)
+        self.assertIsInstance(d2, ToolCall)
+        self.assertEqual(d1.call_id, d2.call_id)
+        self.assertTrue(d1.call_id.startswith("call_"))
+
+    def test_call_id_changes_when_arguments_change(self):
+        # H-2: changing meaningful tool-call input changes generated call_id
+        raw1 = '{"tool_name": "read_file", "tool_args": {"path": "a.py"}}'
+        raw2 = '{"tool_name": "read_file", "tool_args": {"path": "b.py"}}'
+        d1 = ModelAdapter.parse_decision(raw1)
+        d2 = ModelAdapter.parse_decision(raw2)
+        self.assertNotEqual(d1.call_id, d2.call_id)
+
+    def test_explicit_call_id_preserved(self):
+        # H-2: explicitly supplied model call_id is preserved exactly
+        raw = '{"tool_name": "read_file", "tool_args": {"path": "a.py"}, "call_id": "model_explicit_id_42"}'
+        d = ModelAdapter.parse_decision(raw)
+        self.assertEqual(d.call_id, "model_explicit_id_42")
+
+    def test_contradictory_completion_and_tool_call_rejected(self):
+        # M-1: contradictory completion + tool signals must be rejected
+        contradictory_cases = [
+            '{"action": "complete", "tool_name": "read_file", "tool_args": {"path": "a.py"}}',
+            '{"status": "completed", "tool_name": "edit_file", "tool_args": {"path": "a.py"}}',
+            '{"completed": true, "tool_name": "run_bash", "tool_args": {"command": "pytest"}}',
+            '{"action": "finish", "tool_name": "git_status", "tool_args": {}}',
+        ]
+        for raw in contradictory_cases:
+            with self.subTest(raw=raw):
+                with self.assertRaises(ModelParseError) as cm:
+                    ModelAdapter.parse_decision(raw)
+                self.assertIn("Contradictory response", str(cm.exception))
 
 
 class TestModelAdapterMockMode(unittest.TestCase):
@@ -319,6 +382,27 @@ class TestModelAdapterHTTP(unittest.TestCase):
             with self.assertRaises(ModelAPIError) as cm:
                 adapter.call_model("prompt")
             self.assertIn("Missing or invalid 'choices'", str(cm.exception))
+
+    def test_timeout_propagates_to_urlopen_and_raises_model_api_error_without_leaking_key(self):
+        # M-2: timeout reaches urlopen(), socket.timeout converted to ModelAPIError, API key not leaked
+        secret_key = "super-secret-sk-abcdef123456789"
+        with patch("urllib.request.urlopen", side_effect=socket.timeout("The read operation timed out")) as mock_urlopen:
+            adapter = ModelAdapter(api_key=secret_key, base_url="https://api.test.com/v1", timeout=37.5)
+            with self.assertRaises(ModelAPIError) as cm:
+                adapter.call_model("test prompt")
+
+            # 1. Configured timeout reaches urlopen()
+            self.assertEqual(mock_urlopen.call_count, 1)
+            _, kwargs = mock_urlopen.call_args
+            self.assertEqual(kwargs.get("timeout"), 37.5)
+
+            # 2. Timeout is converted to ModelAPIError
+            err_msg = str(cm.exception)
+            self.assertIn("Connection failure", err_msg)
+
+            # 3. Secret API key does not appear in resulting error
+            self.assertNotIn(secret_key, err_msg)
+            self.assertNotIn(secret_key, repr(cm.exception))
 
 
 if __name__ == "__main__":

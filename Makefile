@@ -1,7 +1,9 @@
+PYTHON ?= python3
+
 .PHONY: run test install
 
 run:
-	python -m src.main --issue "$(ISSUE)"
+	$(PYTHON) -m src.main --issue "$(ISSUE)"
 
 test:
 	pytest

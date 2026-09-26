@@ -25,12 +25,8 @@ class OrchestratorConfig(BaseModel):
     system_template: str = ""
     instance_template: str = ""
 
-try:
-    from orchestrator.recovery import RecoveryManager, RecoveryDecision
-    from orchestrator.prompting import PromptBuilder
-except ImportError:
-    from recovery import RecoveryManager, RecoveryDecision  # type: ignore
-    from prompting import PromptBuilder  # type: ignore
+from src.orchestrator.recovery import RecoveryManager, RecoveryDecision
+from src.orchestrator.prompting import PromptBuilder
 
 
 # ---------------------------------------------------------------------------

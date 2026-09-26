@@ -10,7 +10,7 @@ correct on its own, before Person B/C's real code exists.
 Run: python3 -m pytest test_orchestrator.py -v
 """
 
-from orchestrator import Orchestrator, StubContext, ToolResult, VerificationResult, State, OrchestratorConfig
+from src.orchestrator.orchestrator import Orchestrator, StubContext, ToolResult, VerificationResult, State, OrchestratorConfig
 
 
 # ---------------------------------------------------------------------------
