@@ -22,21 +22,21 @@ class Scenario:
     repo: RepositoryIndex
     ground_truth_relevant: list[str]
     max_tokens: int = 8000
-    
+
 def _get_timestamp():
     return datetime.datetime.now(datetime.timezone.utc).isoformat()
 
 def build_noisy_repository() -> RepositoryIndex:
     # Construct an auth-focused repository graph plus many unrelated files
-    
+
     fs_routes = FileSymbols(path="src/routes.py", language="python", local_imports=["src/auth.py"], symbols=[SymbolRecord(name="dummy", kind="function", file="dummy")])
     fs_auth = FileSymbols(path="src/auth.py", language="python", local_imports=["src/token.py"], symbols=[SymbolRecord(name="dummy", kind="function", file="dummy")])
     fs_token = FileSymbols(path="src/token.py", language="python", local_imports=["src/crypto.py"], symbols=[SymbolRecord(name="dummy", kind="function", file="dummy")])
     fs_crypto = FileSymbols(path="src/crypto.py", language="python", local_imports=[], symbols=[SymbolRecord(name="dummy", kind="function", file="dummy")])
-    
+
     noisy_files = ["src/profile.py", "src/payments.py", "src/search.py", "src/email.py", "src/analytics.py"]
     fs_noise = {f: FileSymbols(path=f, language="python", local_imports=[], symbols=[SymbolRecord(name="dummy", kind="function", file="dummy")]) for f in noisy_files}
-    
+
     file_symbols = {
         "src/routes.py": fs_routes,
         "src/auth.py": fs_auth,
@@ -44,7 +44,7 @@ def build_noisy_repository() -> RepositoryIndex:
         "src/crypto.py": fs_crypto,
         **fs_noise,
     }
-    
+
     return RepositoryIndex(
         root_dir="/tmp/bench",
         file_count=len(file_symbols),
@@ -55,10 +55,10 @@ def build_noisy_repository() -> RepositoryIndex:
 
 def create_scenarios() -> list[Scenario]:
     scenarios = []
-    
+
     # Base noisy repo
     repo = build_noisy_repository()
-    
+
     # Scenario 1: Normal execution
     s1_state = TaskState(
         task_id="s1",
@@ -77,7 +77,7 @@ def create_scenarios() -> list[Scenario]:
         repo=repo,
         ground_truth_relevant=["src/auth.py", "src/token.py"],
     ))
-    
+
     # Scenario 2: First failure
     s2_state = TaskState(
         task_id="s2",
@@ -97,7 +97,7 @@ def create_scenarios() -> list[Scenario]:
         repo=repo,
         ground_truth_relevant=["src/auth.py", "src/token.py"],
     ))
-    
+
     # Scenario 3: Repeated failure
     s3_state = TaskState(
         task_id="s3",
@@ -122,7 +122,7 @@ def create_scenarios() -> list[Scenario]:
         # Expansion goes 2 levels: auth -> routes (reverse), auth -> token -> crypto (forward)
         ground_truth_relevant=["src/auth.py", "src/token.py", "src/crypto.py", "src/routes.py"],
     ))
-    
+
     # Scenario 4: Recovery contraction
     s4_state = TaskState(
         task_id="s4",
@@ -147,7 +147,7 @@ def create_scenarios() -> list[Scenario]:
         repo=repo,
         ground_truth_relevant=["src/auth.py", "src/token.py"],
     ))
-    
+
     # Scenario 5: Tight token budget
     s5_state = TaskState(
         task_id="s5",
@@ -174,7 +174,7 @@ def create_scenarios() -> list[Scenario]:
         ground_truth_relevant=["src/auth.py", "src/token.py", "src/crypto.py", "src/routes.py"],
         max_tokens=150, # Extremely tight
     ))
-    
+
     # Scenario 6: Noisy repository
     # We already built the noisy repo, we just want to check irrelevant files are filtered.
     s6_state = TaskState(
@@ -195,5 +195,55 @@ def create_scenarios() -> list[Scenario]:
         repo=repo,
         ground_truth_relevant=["src/auth.py", "src/token.py", "src/routes.py"], # Depth 1 because occurence=1
     ))
-    
+
+    return scenarios
+
+def create_scenarios_extended(tmp_path=None) -> list[Scenario]:
+    scenarios = create_scenarios()
+    repo = scenarios[0].repo
+
+    # Scenario 7: Large tool output
+    # This scenario simulates a huge log output.
+    # For Mode A/B it is kept fully inline (simulated by not using MemoryManager in benchmarks if we just pass state directly).
+    # Wait, Mode C requires externalization. We can do that by creating an observation.
+
+    # Let's create an observation with a huge text
+    large_text = "VERBOSE_LOG_LINE\\n" * 2000 # 34,000 chars
+
+    s7_state = TaskState(
+        task_id="s7",
+        task="Analyze huge log",
+        phase=Phase.EXECUTE,
+        status=TaskStatus.RUNNING,
+        touched_files=["src/auth.py"],
+        relevant_files=["src/token.py"],
+        attempts=[],
+        current_errors=[],
+        discoveries=[],
+        recent_observations=[Observation(type="log", source="stdout", summary="Huge log", raw_output=large_text, timestamp=_get_timestamp())],
+    )
+
+    # If tmp_path is provided, we can pass it through a MemoryManager to get the Mode C behavior!
+    if tmp_path:
+        from src.memory.manager import MemoryManager
+        manager = MemoryManager(base_dir=tmp_path)
+        manager._state = s7_state # wait, better to initialize task and add observation
+        manager.initialize_task("s7", "Analyze huge log")
+        manager.get_state().touched_files = ["src/auth.py"]
+        manager.get_state().relevant_files = ["src/token.py"]
+
+        # Add the huge observation using the manager so it gets externalized!
+        manager.add_observation(Observation(type="log", source="stdout", summary="Huge log", raw_output=large_text, timestamp=_get_timestamp()))
+
+        s7_state = manager.get_state()
+
+    scenarios.append(Scenario(
+        name="Scenario 7: Large tool output",
+        description="huge raw output testing artifact bounds",
+        state=s7_state,
+        repo=repo,
+        ground_truth_relevant=["src/auth.py"],
+        max_tokens=2000, # Large output will exceed this if inline
+    ))
+
     return scenarios

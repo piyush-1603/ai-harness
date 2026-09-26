@@ -617,6 +617,8 @@ class RepositoryIndex:
     documentation_files: list[str] = field(default_factory=list)
     file_roles: dict[str, str] = field(default_factory=dict)
     file_symbols: dict[str, FileSymbols] = field(default_factory=dict)
+    scan_truncated: bool = False
+    truncation_reasons: list[str] = field(default_factory=list)
 
     # -------------------------------------------------------------------------
     # Convenience Property Aliases
@@ -682,6 +684,8 @@ class RepositoryIndex:
             "documentation_files": list(self.documentation_files),
             "file_roles": dict(self.file_roles),
             "file_symbols": {k: v.to_dict() for k, v in self.file_symbols.items()},
+            "scan_truncated": self.scan_truncated,
+            "truncation_reasons": list(self.truncation_reasons),
         }
 
     def to_json(self, indent: int = 2) -> str:
@@ -709,6 +713,8 @@ class RepositoryIndex:
             documentation_files=list(data.get("documentation_files", [])),
             file_roles=dict(data.get("file_roles", {})),
             file_symbols=parsed_symbols,
+            scan_truncated=bool(data.get("scan_truncated", False)),
+            truncation_reasons=list(data.get("truncation_reasons", [])),
         )
 
     # -------------------------------------------------------------------------
@@ -877,6 +883,9 @@ class RepositoryScanner:
         file_roles: dict[str, str] = {}
         file_symbols: dict[str, FileSymbols] = {}
 
+        scan_truncated = False
+        truncation_reasons: list[str] = []
+
         total_symbols_extracted = 0
 
         # Recursively traverse directory tree deterministically
@@ -910,6 +919,9 @@ class RepositoryScanner:
             filenames.sort()
             for filename in filenames:
                 if len(discovered_files) >= cfg.max_scanned_files:
+                    scan_truncated = True
+                    if "max_files_reached" not in truncation_reasons:
+                        truncation_reasons.append("max_files_reached")
                     break
 
                 # Ignore patterns
@@ -918,7 +930,11 @@ class RepositoryScanner:
 
                 full_file_path = current_path / filename
 
-                # Check if symlink is broken or not a file
+                # Symlink escape protection: simplest safe behavior is to skip symlinks entirely
+                if full_file_path.is_symlink():
+                    continue
+
+                # Unreadable / broken file safety
                 try:
                     if not full_file_path.is_file():
                         continue
@@ -926,8 +942,14 @@ class RepositoryScanner:
                 except (OSError, PermissionError):
                     continue
 
+                rel_file = full_file_path.relative_to(root_path).as_posix()
+
                 # File size cap
                 if file_size > cfg.max_file_size:
+                    scan_truncated = True
+                    reason = f"file_too_large:{rel_file}"
+                    if reason not in truncation_reasons:
+                        truncation_reasons.append(reason)
                     continue
 
                 # Binary file exclusion
@@ -991,6 +1013,9 @@ class RepositoryScanner:
                         pass
 
             if len(discovered_files) >= cfg.max_scanned_files:
+                scan_truncated = True
+                if "max_files_reached" not in truncation_reasons:
+                    truncation_reasons.append("max_files_reached")
                 break
 
         # Ensure all collections are deterministically sorted
@@ -1030,4 +1055,6 @@ class RepositoryScanner:
             documentation_files=documentation_files,
             file_roles=dict(sorted(file_roles.items())),
             file_symbols=dict(sorted(file_symbols.items())),
+            scan_truncated=scan_truncated,
+            truncation_reasons=truncation_reasons,
         )

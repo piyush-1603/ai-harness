@@ -1,0 +1,512 @@
+{
+  "benchmark_timestamp": "2026-09-26T21:53:42.088783+00:00",
+  "scenarios": [
+    {
+      "scenario": "Scenario 1: Normal execution",
+      "static": {
+        "scenario": "Scenario 1: Normal execution",
+        "mode": "Static",
+        "estimated_tokens": 199,
+        "budget_limit": 8000,
+        "budget_respected": true,
+        "relevant_files_expected": 2,
+        "relevant_files_included": 2,
+        "relevant_file_recall": 1.0,
+        "irrelevant_files_included": 1,
+        "current_error_retained": true,
+        "failed_verification_retained": true,
+        "failed_attempt_retained": true,
+        "repeated_failure_retained": true,
+        "repository_files_in_context": [
+          "src/auth.py",
+          "src/token.py",
+          "src/crypto.py"
+        ],
+        "output_hash": "6b520360de5be23730fba637d8c153311274a8def5ba30f0aa498334aa8608cd",
+        "estimated_tokens_before": 199
+      },
+      "adaptive": {
+        "scenario": "Scenario 1: Normal execution",
+        "mode": "Adaptive",
+        "estimated_tokens": 197,
+        "budget_limit": 8000,
+        "budget_respected": true,
+        "relevant_files_expected": 2,
+        "relevant_files_included": 2,
+        "relevant_file_recall": 1.0,
+        "irrelevant_files_included": 1,
+        "current_error_retained": true,
+        "failed_verification_retained": true,
+        "failed_attempt_retained": true,
+        "repeated_failure_retained": true,
+        "repository_files_in_context": [
+          "src/auth.py",
+          "src/token.py",
+          "src/crypto.py"
+        ],
+        "output_hash": "fc6c325636d43c18059a181f2b10685bc28e2ca270548bf8bdebed6ace8e4e5b",
+        "estimated_tokens_before": 197
+      },
+      "artifact": {
+        "scenario": "Scenario 1: Normal execution",
+        "mode": "Adaptive + Artifact",
+        "estimated_tokens": 197,
+        "budget_limit": 8000,
+        "budget_respected": true,
+        "relevant_files_expected": 2,
+        "relevant_files_included": 2,
+        "relevant_file_recall": 1.0,
+        "irrelevant_files_included": 1,
+        "current_error_retained": true,
+        "failed_verification_retained": true,
+        "failed_attempt_retained": true,
+        "repeated_failure_retained": true,
+        "repository_files_in_context": [
+          "src/auth.py",
+          "src/token.py",
+          "src/crypto.py"
+        ],
+        "output_hash": "fc6c325636d43c18059a181f2b10685bc28e2ca270548bf8bdebed6ace8e4e5b",
+        "estimated_tokens_before": 197
+      }
+    },
+    {
+      "scenario": "Scenario 2: First failure",
+      "static": {
+        "scenario": "Scenario 2: First failure",
+        "mode": "Static",
+        "estimated_tokens": 203,
+        "budget_limit": 8000,
+        "budget_respected": true,
+        "relevant_files_expected": 2,
+        "relevant_files_included": 2,
+        "relevant_file_recall": 1.0,
+        "irrelevant_files_included": 1,
+        "current_error_retained": true,
+        "failed_verification_retained": true,
+        "failed_attempt_retained": true,
+        "repeated_failure_retained": true,
+        "repository_files_in_context": [
+          "src/auth.py",
+          "src/token.py",
+          "src/crypto.py"
+        ],
+        "output_hash": "e37435e85cabc24863a217db618500f366923d185ec2cb40d603031310c5d9bc",
+        "estimated_tokens_before": 203
+      },
+      "adaptive": {
+        "scenario": "Scenario 2: First failure",
+        "mode": "Adaptive",
+        "estimated_tokens": 201,
+        "budget_limit": 8000,
+        "budget_respected": true,
+        "relevant_files_expected": 2,
+        "relevant_files_included": 2,
+        "relevant_file_recall": 1.0,
+        "irrelevant_files_included": 1,
+        "current_error_retained": true,
+        "failed_verification_retained": true,
+        "failed_attempt_retained": true,
+        "repeated_failure_retained": true,
+        "repository_files_in_context": [
+          "src/auth.py",
+          "src/token.py",
+          "src/crypto.py"
+        ],
+        "output_hash": "9f4e0645c5344032a133558bcae678c0acda99559c522729eecf76827c617b99",
+        "estimated_tokens_before": 201
+      },
+      "artifact": {
+        "scenario": "Scenario 2: First failure",
+        "mode": "Adaptive + Artifact",
+        "estimated_tokens": 201,
+        "budget_limit": 8000,
+        "budget_respected": true,
+        "relevant_files_expected": 2,
+        "relevant_files_included": 2,
+        "relevant_file_recall": 1.0,
+        "irrelevant_files_included": 1,
+        "current_error_retained": true,
+        "failed_verification_retained": true,
+        "failed_attempt_retained": true,
+        "repeated_failure_retained": true,
+        "repository_files_in_context": [
+          "src/auth.py",
+          "src/token.py",
+          "src/crypto.py"
+        ],
+        "output_hash": "9f4e0645c5344032a133558bcae678c0acda99559c522729eecf76827c617b99",
+        "estimated_tokens_before": 201
+      }
+    },
+    {
+      "scenario": "Scenario 3: Repeated failure",
+      "static": {
+        "scenario": "Scenario 3: Repeated failure",
+        "mode": "Static",
+        "estimated_tokens": 220,
+        "budget_limit": 8000,
+        "budget_respected": true,
+        "relevant_files_expected": 4,
+        "relevant_files_included": 3,
+        "relevant_file_recall": 0.75,
+        "irrelevant_files_included": 0,
+        "current_error_retained": true,
+        "failed_verification_retained": true,
+        "failed_attempt_retained": true,
+        "repeated_failure_retained": true,
+        "repository_files_in_context": [
+          "src/auth.py",
+          "src/token.py",
+          "src/crypto.py"
+        ],
+        "output_hash": "60c136a1a5f088d399b3f24c421a74a0cec9a53c5de122854e85ccddc0e3bc7a",
+        "estimated_tokens_before": 220
+      },
+      "adaptive": {
+        "scenario": "Scenario 3: Repeated failure",
+        "mode": "Adaptive",
+        "estimated_tokens": 218,
+        "budget_limit": 8000,
+        "budget_respected": true,
+        "relevant_files_expected": 4,
+        "relevant_files_included": 3,
+        "relevant_file_recall": 0.75,
+        "irrelevant_files_included": 0,
+        "current_error_retained": true,
+        "failed_verification_retained": true,
+        "failed_attempt_retained": true,
+        "repeated_failure_retained": true,
+        "repository_files_in_context": [
+          "src/auth.py",
+          "src/token.py",
+          "src/crypto.py"
+        ],
+        "output_hash": "38d55e6645ea95ab36b5914ce0dc0d7ecc04f8b9579ed592ba1b68d67994b9d4",
+        "estimated_tokens_before": 218
+      },
+      "artifact": {
+        "scenario": "Scenario 3: Repeated failure",
+        "mode": "Adaptive + Artifact",
+        "estimated_tokens": 218,
+        "budget_limit": 8000,
+        "budget_respected": true,
+        "relevant_files_expected": 4,
+        "relevant_files_included": 3,
+        "relevant_file_recall": 0.75,
+        "irrelevant_files_included": 0,
+        "current_error_retained": true,
+        "failed_verification_retained": true,
+        "failed_attempt_retained": true,
+        "repeated_failure_retained": true,
+        "repository_files_in_context": [
+          "src/auth.py",
+          "src/token.py",
+          "src/crypto.py"
+        ],
+        "output_hash": "38d55e6645ea95ab36b5914ce0dc0d7ecc04f8b9579ed592ba1b68d67994b9d4",
+        "estimated_tokens_before": 218
+      }
+    },
+    {
+      "scenario": "Scenario 4: Recovery contraction",
+      "static": {
+        "scenario": "Scenario 4: Recovery contraction",
+        "mode": "Static",
+        "estimated_tokens": 224,
+        "budget_limit": 8000,
+        "budget_respected": true,
+        "relevant_files_expected": 2,
+        "relevant_files_included": 2,
+        "relevant_file_recall": 1.0,
+        "irrelevant_files_included": 1,
+        "current_error_retained": true,
+        "failed_verification_retained": true,
+        "failed_attempt_retained": true,
+        "repeated_failure_retained": true,
+        "repository_files_in_context": [
+          "src/auth.py",
+          "src/token.py",
+          "src/crypto.py"
+        ],
+        "output_hash": "4a8eb6230bbfabbf86886843ff4bfa39abf9e257547520ede78209844eacdd77",
+        "estimated_tokens_before": 224
+      },
+      "adaptive": {
+        "scenario": "Scenario 4: Recovery contraction",
+        "mode": "Adaptive",
+        "estimated_tokens": 222,
+        "budget_limit": 8000,
+        "budget_respected": true,
+        "relevant_files_expected": 2,
+        "relevant_files_included": 2,
+        "relevant_file_recall": 1.0,
+        "irrelevant_files_included": 1,
+        "current_error_retained": true,
+        "failed_verification_retained": true,
+        "failed_attempt_retained": true,
+        "repeated_failure_retained": true,
+        "repository_files_in_context": [
+          "src/auth.py",
+          "src/token.py",
+          "src/crypto.py"
+        ],
+        "output_hash": "899aac066f20f604e0e013c83756ca2a8c011afe851af82b7c740e2a4afb6521",
+        "estimated_tokens_before": 222
+      },
+      "artifact": {
+        "scenario": "Scenario 4: Recovery contraction",
+        "mode": "Adaptive + Artifact",
+        "estimated_tokens": 222,
+        "budget_limit": 8000,
+        "budget_respected": true,
+        "relevant_files_expected": 2,
+        "relevant_files_included": 2,
+        "relevant_file_recall": 1.0,
+        "irrelevant_files_included": 1,
+        "current_error_retained": true,
+        "failed_verification_retained": true,
+        "failed_attempt_retained": true,
+        "repeated_failure_retained": true,
+        "repository_files_in_context": [
+          "src/auth.py",
+          "src/token.py",
+          "src/crypto.py"
+        ],
+        "output_hash": "899aac066f20f604e0e013c83756ca2a8c011afe851af82b7c740e2a4afb6521",
+        "estimated_tokens_before": 222
+      }
+    },
+    {
+      "scenario": "Scenario 5: Tight token budget",
+      "static": {
+        "scenario": "Scenario 5: Tight token budget",
+        "mode": "Static",
+        "estimated_tokens": 150,
+        "budget_limit": 150,
+        "budget_respected": true,
+        "relevant_files_expected": 4,
+        "relevant_files_included": 3,
+        "relevant_file_recall": 0.75,
+        "irrelevant_files_included": 0,
+        "current_error_retained": false,
+        "failed_verification_retained": false,
+        "failed_attempt_retained": false,
+        "repeated_failure_retained": false,
+        "repository_files_in_context": [
+          "src/auth.py",
+          "src/token.py",
+          "src/crypto.py"
+        ],
+        "output_hash": "c69e98c6590719b4f6439808c7157ee2b4c3f4638c96023a41dfbfd7db5cfccc",
+        "estimated_tokens_before": 150
+      },
+      "adaptive": {
+        "scenario": "Scenario 5: Tight token budget",
+        "mode": "Adaptive",
+        "estimated_tokens": 135,
+        "budget_limit": 150,
+        "budget_respected": true,
+        "relevant_files_expected": 4,
+        "relevant_files_included": 2,
+        "relevant_file_recall": 0.5,
+        "irrelevant_files_included": 0,
+        "current_error_retained": true,
+        "failed_verification_retained": true,
+        "failed_attempt_retained": true,
+        "repeated_failure_retained": true,
+        "repository_files_in_context": [
+          "src/auth.py",
+          "src/token.py"
+        ],
+        "output_hash": "237377e7140b4dedfa2b4bcda2a3a34adad97b4514f6e5179a1a6439863eaf24",
+        "estimated_tokens_before": 357
+      },
+      "artifact": {
+        "scenario": "Scenario 5: Tight token budget",
+        "mode": "Adaptive + Artifact",
+        "estimated_tokens": 135,
+        "budget_limit": 150,
+        "budget_respected": true,
+        "relevant_files_expected": 4,
+        "relevant_files_included": 2,
+        "relevant_file_recall": 0.5,
+        "irrelevant_files_included": 0,
+        "current_error_retained": true,
+        "failed_verification_retained": true,
+        "failed_attempt_retained": true,
+        "repeated_failure_retained": true,
+        "repository_files_in_context": [
+          "src/auth.py",
+          "src/token.py"
+        ],
+        "output_hash": "237377e7140b4dedfa2b4bcda2a3a34adad97b4514f6e5179a1a6439863eaf24",
+        "estimated_tokens_before": 357
+      }
+    },
+    {
+      "scenario": "Scenario 6: Noisy repository",
+      "static": {
+        "scenario": "Scenario 6: Noisy repository",
+        "mode": "Static",
+        "estimated_tokens": 175,
+        "budget_limit": 8000,
+        "budget_respected": true,
+        "relevant_files_expected": 3,
+        "relevant_files_included": 2,
+        "relevant_file_recall": 0.6666666666666666,
+        "irrelevant_files_included": 0,
+        "current_error_retained": true,
+        "failed_verification_retained": true,
+        "failed_attempt_retained": true,
+        "repeated_failure_retained": true,
+        "repository_files_in_context": [
+          "src/auth.py",
+          "src/token.py"
+        ],
+        "output_hash": "4ce8b7e63a56cbd4cd1c72dfa207d3fb91c21e8968937e93975836fb71a80bd1",
+        "estimated_tokens_before": 175
+      },
+      "adaptive": {
+        "scenario": "Scenario 6: Noisy repository",
+        "mode": "Adaptive",
+        "estimated_tokens": 168,
+        "budget_limit": 8000,
+        "budget_respected": true,
+        "relevant_files_expected": 3,
+        "relevant_files_included": 2,
+        "relevant_file_recall": 0.6666666666666666,
+        "irrelevant_files_included": 0,
+        "current_error_retained": true,
+        "failed_verification_retained": true,
+        "failed_attempt_retained": true,
+        "repeated_failure_retained": true,
+        "repository_files_in_context": [
+          "src/auth.py",
+          "src/token.py"
+        ],
+        "output_hash": "06dd559e924a28aae58dacb32cbf82afa7729efda1356e9768cc05ed8d33c87b",
+        "estimated_tokens_before": 168
+      },
+      "artifact": {
+        "scenario": "Scenario 6: Noisy repository",
+        "mode": "Adaptive + Artifact",
+        "estimated_tokens": 168,
+        "budget_limit": 8000,
+        "budget_respected": true,
+        "relevant_files_expected": 3,
+        "relevant_files_included": 2,
+        "relevant_file_recall": 0.6666666666666666,
+        "irrelevant_files_included": 0,
+        "current_error_retained": true,
+        "failed_verification_retained": true,
+        "failed_attempt_retained": true,
+        "repeated_failure_retained": true,
+        "repository_files_in_context": [
+          "src/auth.py",
+          "src/token.py"
+        ],
+        "output_hash": "06dd559e924a28aae58dacb32cbf82afa7729efda1356e9768cc05ed8d33c87b",
+        "estimated_tokens_before": 168
+      }
+    },
+    {
+      "scenario": "Scenario 7: Large tool output",
+      "static": {
+        "scenario": "Scenario 7: Large tool output",
+        "mode": "Static",
+        "estimated_tokens": 2000,
+        "budget_limit": 2000,
+        "budget_respected": true,
+        "relevant_files_expected": 1,
+        "relevant_files_included": 1,
+        "relevant_file_recall": 1.0,
+        "irrelevant_files_included": 2,
+        "current_error_retained": true,
+        "failed_verification_retained": true,
+        "failed_attempt_retained": true,
+        "repeated_failure_retained": true,
+        "repository_files_in_context": [
+          "src/auth.py",
+          "src/token.py",
+          "src/crypto.py"
+        ],
+        "output_hash": "6f22af3480f7ea08ecf5ddd7811a2da772d1a08c6f281a4f9e492ed0840bb5b0",
+        "estimated_tokens_before": 2000
+      },
+      "adaptive": {
+        "scenario": "Scenario 7: Large tool output",
+        "mode": "Adaptive",
+        "estimated_tokens": 186,
+        "budget_limit": 2000,
+        "budget_respected": true,
+        "relevant_files_expected": 1,
+        "relevant_files_included": 1,
+        "relevant_file_recall": 1.0,
+        "irrelevant_files_included": 2,
+        "current_error_retained": true,
+        "failed_verification_retained": true,
+        "failed_attempt_retained": true,
+        "repeated_failure_retained": true,
+        "repository_files_in_context": [
+          "src/auth.py",
+          "src/token.py",
+          "src/crypto.py"
+        ],
+        "output_hash": "781cb74b22e8fbbe70121bd72a4180f20728fbc3ef80fc62d47f925953f4cea8",
+        "estimated_tokens_before": 186
+      },
+      "artifact": {
+        "scenario": "Scenario 7: Large tool output",
+        "mode": "Adaptive + Artifact",
+        "estimated_tokens": 185,
+        "budget_limit": 2000,
+        "budget_respected": true,
+        "relevant_files_expected": 1,
+        "relevant_files_included": 1,
+        "relevant_file_recall": 1.0,
+        "irrelevant_files_included": 2,
+        "current_error_retained": true,
+        "failed_verification_retained": true,
+        "failed_attempt_retained": true,
+        "repeated_failure_retained": true,
+        "repository_files_in_context": [
+          "src/auth.py",
+          "src/token.py",
+          "src/crypto.py"
+        ],
+        "output_hash": "0424364f379488fe11a533f720e434cf31f68ce606c24f8e4fca72a28d49bf76",
+        "estimated_tokens_before": 185
+      }
+    }
+  ],
+  "aggregate_metrics": {
+    "static": {
+      "average_estimated_tokens": 453.0,
+      "average_estimated_tokens_before": 453.0,
+      "average_relevant_file_recall": 0.880952380952381,
+      "total_irrelevant_files_included": 5,
+      "critical_evidence_retention_rate": 0.8571428571428571,
+      "number_of_budget_violations": 0,
+      "determinism_failures": 0
+    },
+    "adaptive": {
+      "average_estimated_tokens": 189.57142857142858,
+      "average_estimated_tokens_before": 221.28571428571428,
+      "average_relevant_file_recall": 0.8452380952380952,
+      "total_irrelevant_files_included": 5,
+      "critical_evidence_retention_rate": 1.0,
+      "number_of_budget_violations": 0,
+      "determinism_failures": 0
+    },
+    "artifact": {
+      "average_estimated_tokens": 189.42857142857142,
+      "average_estimated_tokens_before": 221.14285714285714,
+      "average_relevant_file_recall": 0.8452380952380952,
+      "total_irrelevant_files_included": 5,
+      "critical_evidence_retention_rate": 1.0,
+      "number_of_budget_violations": 0,
+      "determinism_failures": 0
+    }
+  }
+}
