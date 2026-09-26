@@ -27,9 +27,11 @@ class ContextConfig:
     include_symbols: bool = False
     include_local_imports: bool = False
     repository_scope: Optional[Union[RepositoryScope, str]] = None
+    pressure_level: str = "LOW"
     min_failure_occurrences: int = 2
     max_context_tokens: Optional[int] = None
     chars_per_token: int = 4
+    max_expanded_files: int = 20
 
     def to_dict(self) -> dict[str, Any]:
         scope_val = None
@@ -53,9 +55,11 @@ class ContextConfig:
             "include_symbols": self.include_symbols,
             "include_local_imports": self.include_local_imports,
             "repository_scope": scope_val,
+            "pressure_level": self.pressure_level,
             "min_failure_occurrences": self.min_failure_occurrences,
             "max_context_tokens": self.max_context_tokens,
             "chars_per_token": self.chars_per_token,
+            "max_expanded_files": self.max_expanded_files,
         }
 
     @classmethod
@@ -74,7 +78,9 @@ class ContextConfig:
             include_symbols=bool(data.get("include_symbols", False)),
             include_local_imports=bool(data.get("include_local_imports", False)),
             repository_scope=data.get("repository_scope"),
+            pressure_level=data.get("pressure_level", "LOW"),
             min_failure_occurrences=int(data.get("min_failure_occurrences", 2)),
             max_context_tokens=data.get("max_context_tokens"),
             chars_per_token=int(data.get("chars_per_token", 4)),
+            max_expanded_files=int(data.get("max_expanded_files", 20)),
         )
