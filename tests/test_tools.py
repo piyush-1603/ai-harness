@@ -264,6 +264,12 @@ class TestShellOps(unittest.TestCase):
         self.assertTrue(res.success)
         self.assertEqual(res.tool_name, ToolName.RUN_TESTS)
 
+    def test_silent_shell_failure(self):
+        res = run_bash("exit 7", workspace_dir=str(self.ws))
+        self.assertFalse(res.success)
+        self.assertEqual(res.exit_code, 7)
+        self.assertEqual(res.error, "Command exited with non-zero exit code 7")
+
 
 class TestSearchOps(unittest.TestCase):
     def setUp(self):
@@ -400,6 +406,53 @@ class TestGitTools(unittest.TestCase):
         self.assertEqual(diff_res.tool_name, ToolName.GIT_DIFF)
         self.assertIn("-version 1", diff_res.output)
         self.assertIn("+version 2", diff_res.output)
+
+    def test_git_diff_path_with_single_quote(self):
+        quote_dir = self.ws / "test's"
+        quote_dir.mkdir()
+        quote_file = quote_dir / "file.py"
+        quote_file.write_text("orig = 1\n")
+        subprocess.run(["git", "add", "."], cwd=str(self.ws), check=True)
+        subprocess.run(["git", "commit", "-m", "add quote file"], cwd=str(self.ws), check=True)
+
+        quote_file.write_text("orig = 2\n")
+        res = git_diff(path="test's/file.py", workspace_dir=str(self.ws))
+        self.assertTrue(res.success)
+        self.assertEqual(res.tool_name, ToolName.GIT_DIFF)
+        self.assertIn("-orig = 1", res.output)
+        self.assertIn("+orig = 2", res.output)
+
+    def test_git_diff_path_with_spaces(self):
+        space_dir = self.ws / "path with spaces"
+        space_dir.mkdir()
+        space_file = space_dir / "file.txt"
+        space_file.write_text("space 1\n")
+        subprocess.run(["git", "add", "."], cwd=str(self.ws), check=True)
+        subprocess.run(["git", "commit", "-m", "add spaces file"], cwd=str(self.ws), check=True)
+
+        space_file.write_text("space 2\n")
+        res = git_diff(path="path with spaces/file.txt", workspace_dir=str(self.ws))
+        self.assertTrue(res.success)
+        self.assertEqual(res.tool_name, ToolName.GIT_DIFF)
+        self.assertIn("-space 1", res.output)
+        self.assertIn("+space 2", res.output)
+
+    def test_git_diff_clean_tree(self):
+        res = git_diff(workspace_dir=str(self.ws))
+        self.assertTrue(res.success)
+        self.assertEqual(res.output, "")
+
+    def test_git_tools_non_git_workspace(self):
+        with tempfile.TemporaryDirectory() as non_git:
+            diff_res = git_diff(workspace_dir=non_git)
+            self.assertFalse(diff_res.success)
+            self.assertNotEqual(diff_res.exit_code, 0)
+            self.assertIn("Not a git repository", diff_res.output)
+
+            status_res = git_status(workspace_dir=non_git)
+            self.assertFalse(status_res.success)
+            self.assertNotEqual(status_res.exit_code, 0)
+            self.assertIn("not a git repository", status_res.output)
 
 
 class TestToolEngine(unittest.TestCase):
@@ -683,6 +736,33 @@ class TestToolEngine(unittest.TestCase):
         self.assertEqual(res.exit_code, 124)
         self.assertIn("timed out", res.error)
         self.assertGreaterEqual(res.duration_sec, 0.9)
+
+    def test_run_tests_empty_command_fallback(self):
+        """Verifies registry execution with empty test_command falls back to pytest."""
+        call = ToolCall(
+            tool_name=ToolName.RUN_TESTS,
+            tool_args={"test_command": ""},
+            call_id="c_empty_test",
+        )
+        res = self.engine.execute(call)
+        self.assertIsInstance(res, ToolResult)
+        self.assertEqual(res.tool_name, ToolName.RUN_TESTS)
+        # Must not be rejected with an argument-validation error
+        self.assertNotIn("cannot be empty", res.error or "")
+        self.assertNotIn("Invalid argument", res.error or "")
+
+    def test_run_tests_omitted_command_fallback(self):
+        """Verifies registry execution with omitted test_command falls back to pytest."""
+        call = ToolCall(
+            tool_name=ToolName.RUN_TESTS,
+            tool_args={},
+            call_id="c_omitted_test",
+        )
+        res = self.engine.execute(call)
+        self.assertIsInstance(res, ToolResult)
+        self.assertEqual(res.tool_name, ToolName.RUN_TESTS)
+        # Must not be rejected with an argument-validation error
+        self.assertNotIn("Missing required argument", res.error or "")
 
 
 if __name__ == "__main__":

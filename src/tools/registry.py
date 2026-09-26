@@ -363,7 +363,7 @@ class ToolEngine:
         return self.run_bash(command=command, timeout=timeout)
 
     def _dispatch_run_tests(self, args: Dict[str, Any]) -> ToolResult:
-        test_command, err = _validate_str(args, "test_command", ToolName.RUN_TESTS.value, required=False, default=None, allow_empty=False)
+        test_command, err = _validate_str(args, "test_command", ToolName.RUN_TESTS.value, required=False, default=None, allow_empty=True)
         if err:
             return self._arg_error(ToolName.RUN_TESTS, err)
 
