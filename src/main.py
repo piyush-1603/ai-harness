@@ -13,14 +13,17 @@ def main():
     context = StubContext()
     tools = StubTools()
     
-    orchestrator = Orchestrator(context=context, tools=tools, max_attempts=args.max_attempts)
+    from src.orchestrator.orchestrator import OrchestratorConfig
+    config = OrchestratorConfig(step_limit=args.max_attempts)
+    orchestrator = Orchestrator(context=context, tools=tools, config=config)
     
     print(f"Starting orchestration for issue: {args.issue}")
     report = orchestrator.run(args.issue)
     
     print("\n--- Final Report ---")
     print(f"Status: {report['status']}")
-    print(f"Attempts: {report['attempts']}")
+    print(f"Attempts: {report.get('n_calls', 0)}")
+    print(f"Cost: ${report.get('cost', 0.0):.2f}")
     if report['last_error']:
         print(f"Last Error: {report['last_error']}")
     

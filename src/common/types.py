@@ -65,9 +65,9 @@ class ToolCall:
 
 @dataclass
 class ToolResult:
-    tool_name: ToolName
-    success: bool
-    output: str                   # Safely truncated if exceeding bounds
+    tool_name: ToolName = ToolName.RUN_BASH
+    success: bool = True
+    output: str = ""                   # Safely truncated if exceeding bounds
     exit_code: int = 0
     error: Optional[str] = None
     duration_sec: float = 0.0
@@ -92,6 +92,18 @@ class ScratchpadState:
     history_attempts: List[RecoveryAttempt] = field(default_factory=list)
     files_modified: List[str] = field(default_factory=list)
     last_known_diff: str = ""
+    # Compatibility fields for Track A orchestrator
+    hypothesis: str = ""
+    files_touched: List[str] = field(default_factory=list)
+    attempt_history: List[str] = field(default_factory=list)
+
+
+@dataclass
+class VerificationResult:
+    passed: bool
+    failing_tests: List[str] = field(default_factory=list)
+    stdout: str = ""
+    stderr: str = ""
 
 
 @dataclass
