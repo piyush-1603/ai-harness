@@ -173,23 +173,26 @@ class TUIDataProvider:
     def get_repository_data(self) -> RepositoryData:
         if not self.repo:
             return RepositoryData([])
-            
+
         state = self.memory.get_state()
         files = []
-        
-        for path, fs in self.repo.file_symbols.items():
+
+        for path in self.repo.discovered_files:
             touched = path in state.touched_files
             relevant = path in state.relevant_files
+            fs = self.repo.file_symbols.get(path)
+            role = self.repo.file_roles.get(path, "source")
             files.append(RepositoryFileData(
                 path=path,
-                role="source",
+                role=role,
                 touched=touched,
                 relevant=relevant,
-                symbols=[f"{s.name}()" if s.kind in ("function", "method") else s.name for s in fs.symbols],
-                imports=fs.local_imports
+                symbols=[f"{s.name}()" if s.kind in ("function", "method") else s.name for s in fs.symbols] if fs else [],
+                imports=fs.local_imports if fs else [],
             ))
-            
+
         return RepositoryData(files)
+
 
     def get_events_data(self, limit: int = 100) -> list[EventItemData]:
         if not hasattr(self.memory, 'get_events'):

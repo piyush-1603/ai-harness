@@ -11,6 +11,7 @@ from src.tui.screens.events import EventsScreen
 
 from src.memory.manager import MemoryManager
 from src.context.diagnostics import ContextDiagnosticsEngine
+from src.context.scanner import RepositoryScanner
 from src.tui.data import TUIDataProvider
 
 class HarnessTUI(App):
@@ -36,13 +37,13 @@ class HarnessTUI(App):
         self.install_screen(OverviewScreen(self.provider), "overview")
         self.install_screen(ContextScreen(self.provider), "context")
         self.install_screen(MemoryScreen(self.provider), "memory")
-        self.install_screen(RepositoryScreen(), "repository")
-        self.install_screen(EventsScreen(), "events")
+        self.install_screen(RepositoryScreen(self.provider), "repository")
+        self.install_screen(EventsScreen(self.provider), "events")
 
         self.push_screen("overview")
 
     def action_help(self) -> None:
-        pass # Placeholder
+        pass
 
 def main():
     parser = argparse.ArgumentParser(description="AI Harness TUI")
@@ -57,11 +58,23 @@ def main():
     provider = None
     if args.task:
         try:
-            # Load actual task state
             memory = MemoryManager(base_dir=".harness")
             memory.load(args.task)
             engine = ContextDiagnosticsEngine()
-            provider = TUIDataProvider(memory_manager=memory, diagnostics_engine=engine)
+
+            # Build repository index once at bootstrap — read-only, never re-scanned
+            repo_index = None
+            try:
+                scanner = RepositoryScanner()
+                repo_index = scanner.scan(".")
+            except Exception:
+                pass  # Repository index is optional; TUI degrades gracefully
+
+            provider = TUIDataProvider(
+                memory_manager=memory,
+                diagnostics_engine=engine,
+                repository_index=repo_index,
+            )
         except Exception:
             print(f"Error: Could not load task '{args.task}'")
             sys.exit(1)
