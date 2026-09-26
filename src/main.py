@@ -5,10 +5,13 @@ import uuid
 
 from src.context.scanner import RepositoryScanner
 from src.memory.manager import MemoryManager
+from src.memory.models import Observation
 from src.common.types import TaskSpec
 from src.orchestrator.orchestrator import Orchestrator, OrchestratorConfig
 from src.verification.verifier import VerificationEngine
 from src.tools.registry import ToolEngine
+from src.auth.github_auth import check_repo_access, clone_authenticated, parse_repo_identifier
+
 
 def main():
     parser = argparse.ArgumentParser(description="AI Coding Harness - Orchestrator")
@@ -16,7 +19,54 @@ def main():
     parser.add_argument("--max-attempts", type=int, default=8, help="Maximum number of steps before escalating.")
     parser.add_argument("--workspace", type=str, default=".", help="Workspace root directory to scan.")
     parser.add_argument("--test-command", type=str, default=os.environ.get("HARNESS_TEST_COMMAND", ""), help="Test command to run during verification.")
+    parser.add_argument("--repo", type=str, help="GitHub repository to authenticate and clone (e.g. owner/name)")
+    parser.add_argument("--github-token", type=str, default=os.environ.get("GITHUB_TOKEN", ""), help="GitHub token for auth")
+    parser.add_argument("--require-auth", action="store_true", help="Require authorization via --repo")
+
     args = parser.parse_args()
+
+
+    require_auth = args.require_auth or os.environ.get("HARNESS_REQUIRE_AUTH", "").lower() in ("true", "1")
+    if require_auth and not args.repo:
+        print("Error: --require-auth is set but --repo is missing.", file=sys.stderr)
+        sys.exit(1)
+
+    auth_result = None
+    if args.repo:
+        auth_result = check_repo_access(args.repo, args.github_token)
+        print(f"Authorized {auth_result.owner}/{auth_result.name}")
+        
+        if not os.path.exists(args.workspace):
+            clone_authenticated(args.repo, args.workspace, args.github_token)
+        else:
+            # Check if workspace is non-empty
+            if os.path.isdir(args.workspace) and os.listdir(args.workspace):
+                import subprocess
+                try:
+                    res = subprocess.run(
+                        ["git", "remote", "get-url", "origin"],
+                        cwd=args.workspace,
+                        capture_output=True,
+                        text=True,
+                        check=True
+                    )
+                    url = res.stdout.strip()
+                    # Example URLs: https://github.com/owner/name.git or git@github.com:owner/name.git
+                    # We can use parse_repo_identifier on a cleaned url, or just simple substring match
+                    # Let's extract the owner/name part
+                    if "github.com" in url:
+                        part = url.split("github.com")[-1].lstrip(":/").removesuffix(".git")
+                        ws_owner, ws_name = parse_repo_identifier(part)
+                    else:
+                        ws_owner, ws_name = "", ""
+                        
+                    if (ws_owner.lower(), ws_name.lower()) != (auth_result.owner.lower(), auth_result.name.lower()):
+                        print(f"Error: Existing workspace {args.workspace} does not match authorized repo {auth_result.owner}/{auth_result.name}.", file=sys.stderr)
+                        sys.exit(1)
+                except subprocess.CalledProcessError:
+                    print(f"Error: Existing workspace {args.workspace} is not a valid git repository or missing origin remote.", file=sys.stderr)
+                    sys.exit(1)
+
 
     print(f"Scanning repository at {args.workspace}...")
     
@@ -35,7 +85,17 @@ def main():
         tool_engine=tool_engine,
     )
     
+
     print(f"Starting orchestration for issue: {args.issue}")
+    if auth_result:
+        orchestrator.memory_manager.record_observation(
+            Observation(
+                type="auth",
+                source="github_auth",
+                summary=f"Authorized {auth_result.owner}/{auth_result.name} at {auth_result.authorized_at}"
+            )
+        )
+
     report = orchestrator.run(task_spec)
 
     print("\n--- Final Report ---")
