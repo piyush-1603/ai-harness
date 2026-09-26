@@ -222,6 +222,179 @@ and then:
                     ModelAdapter.parse_decision(raw)
                 self.assertIn("Contradictory response", str(cm.exception))
 
+    def test_null_content_with_single_tool_call_json_string_args(self):
+        raw = json.dumps({
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_12345",
+                    "type": "function",
+                    "function": {
+                        "name": "edit_file",
+                        "arguments": json.dumps({
+                            "path": "calculator.py",
+                            "search_block": "return a - b\n",
+                            "replace_block": "return a + b\n",
+                        }),
+                    },
+                }
+            ],
+        })
+        decision = ModelAdapter.parse_decision(raw)
+        self.assertIsInstance(decision, ToolCall)
+        self.assertEqual(decision.tool_name, ToolName.EDIT_FILE)
+        self.assertEqual(
+            decision.tool_args,
+            {
+                "path": "calculator.py",
+                "search_block": "return a - b\n",
+                "replace_block": "return a + b\n",
+            },
+        )
+        self.assertEqual(decision.call_id, "call_12345")
+
+    def test_null_content_with_multiple_tool_calls_deterministically_picks_first(self):
+        raw = json.dumps({
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_first",
+                    "type": "function",
+                    "function": {
+                        "name": "read_file",
+                        "arguments": json.dumps({"path": "first.py"}),
+                    },
+                },
+                {
+                    "id": "call_second",
+                    "type": "function",
+                    "function": {
+                        "name": "write_file",
+                        "arguments": json.dumps({"path": "second.py", "content": "x"}),
+                    },
+                },
+            ],
+        })
+        decision = ModelAdapter.parse_decision(raw)
+        self.assertIsInstance(decision, ToolCall)
+        self.assertEqual(decision.tool_name, ToolName.READ_FILE)
+        self.assertEqual(decision.tool_args, {"path": "first.py"})
+        self.assertEqual(decision.call_id, "call_first")
+
+    def test_tool_calls_with_first_invalid_picks_first_valid(self):
+        raw = json.dumps({
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_invalid",
+                    "type": "function",
+                    "function": {
+                        "name": "unknown_tool",
+                        "arguments": json.dumps({}),
+                    },
+                },
+                {
+                    "id": "call_valid",
+                    "type": "function",
+                    "function": {
+                        "name": "git_status",
+                        "arguments": "{}",
+                    },
+                },
+            ],
+        })
+        decision = ModelAdapter.parse_decision(raw)
+        self.assertIsInstance(decision, ToolCall)
+        self.assertEqual(decision.tool_name, ToolName.GIT_STATUS)
+        self.assertEqual(decision.call_id, "call_valid")
+
+    def test_null_content_with_dict_tool_args(self):
+        raw = json.dumps({
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_dict",
+                    "type": "function",
+                    "function": {
+                        "name": "read_file",
+                        "arguments": {"path": "calculator.py"},
+                    },
+                }
+            ],
+        })
+        decision = ModelAdapter.parse_decision(raw)
+        self.assertIsInstance(decision, ToolCall)
+        self.assertEqual(decision.tool_name, ToolName.READ_FILE)
+        self.assertEqual(decision.tool_args, {"path": "calculator.py"})
+        self.assertEqual(decision.call_id, "call_dict")
+
+    def test_null_content_with_complete_tool_call(self):
+        raw = json.dumps({
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_finish",
+                    "type": "function",
+                    "function": {
+                        "name": "complete",
+                        "arguments": json.dumps({"message": "Fixed bug successfully"}),
+                    },
+                }
+            ],
+        })
+        decision = ModelAdapter.parse_decision(raw)
+        self.assertIsInstance(decision, ModelCompletion)
+        self.assertEqual(decision.message, "Fixed bug successfully")
+
+    def test_null_content_with_empty_tool_calls_raises_parse_error(self):
+        raw = json.dumps({
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [],
+        })
+        with self.assertRaises(ModelParseError) as cm:
+            ModelAdapter.parse_decision(raw)
+        self.assertIn("Response has neither usable content nor tool_calls", str(cm.exception))
+
+    def test_null_content_without_tool_calls_raises_parse_error(self):
+        raw = json.dumps({
+            "role": "assistant",
+            "content": None,
+        })
+        with self.assertRaises(ModelParseError) as cm:
+            ModelAdapter.parse_decision(raw)
+        self.assertIn("Response has neither usable content nor tool_calls", str(cm.exception))
+
+    def test_tool_calls_with_malformed_arguments_json_raises(self):
+        raw = json.dumps({
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_bad",
+                    "type": "function",
+                    "function": {
+                        "name": "read_file",
+                        "arguments": "{not-valid-json",
+                    },
+                }
+            ],
+        })
+        with self.assertRaises(ModelParseError) as cm:
+            ModelAdapter.parse_decision(raw)
+        self.assertIn("Malformed JSON in tool_call arguments", str(cm.exception))
+
+    def test_normal_completion_parsing_still_works(self):
+        raw = json.dumps({"action": "complete", "message": "Everything verified and all tests pass."})
+        decision = ModelAdapter.parse_decision(raw)
+        self.assertIsInstance(decision, ModelCompletion)
+        self.assertEqual(decision.message, "Everything verified and all tests pass.")
+
 
 class TestModelAdapterMockMode(unittest.TestCase):
     """Unit tests for ModelAdapter explicit mock mode."""
@@ -412,6 +585,73 @@ class TestModelAdapterHTTP(unittest.TestCase):
             # 3. Secret API key does not appear in resulting error
             self.assertNotIn(secret_key, err_msg)
             self.assertNotIn(secret_key, repr(cm.exception))
+
+    def test_http_200_null_content_with_tool_calls_parsed_end_to_end(self):
+        fake_api_response = {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "id": "call_openrouter_123",
+                                "type": "function",
+                                "function": {
+                                    "name": "edit_file",
+                                    "arguments": json.dumps({
+                                        "path": "calculator.py",
+                                        "search_block": "return a - b\n",
+                                        "replace_block": "return a + b\n",
+                                    }),
+                                },
+                            }
+                        ],
+                    }
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 80,
+                "completion_tokens": 30,
+                "total_tokens": 110,
+            },
+        }
+        fake_body = json.dumps(fake_api_response).encode("utf-8")
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = fake_body
+        mock_resp.__enter__.return_value = mock_resp
+
+        with patch("urllib.request.urlopen", return_value=mock_resp):
+            adapter = ModelAdapter(api_key="sk-test", base_url="https://api.test.com/v1")
+            decision = adapter.decide("fix bug")
+
+            self.assertIsInstance(decision, ToolCall)
+            self.assertEqual(decision.tool_name, ToolName.EDIT_FILE)
+            self.assertEqual(decision.call_id, "call_openrouter_123")
+            self.assertEqual(decision.tool_args["path"], "calculator.py")
+            self.assertEqual(adapter.last_token_usage["total_tokens"], 110)
+
+    def test_http_200_null_content_without_tool_calls_raises_model_api_error(self):
+        fake_api_response = {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                    }
+                }
+            ],
+        }
+        fake_body = json.dumps(fake_api_response).encode("utf-8")
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = fake_body
+        mock_resp.__enter__.return_value = mock_resp
+
+        with patch("urllib.request.urlopen", return_value=mock_resp):
+            adapter = ModelAdapter(api_key="sk-test", base_url="https://api.test.com/v1")
+            with self.assertRaises(ModelAPIError) as cm:
+                adapter.call_model("prompt")
+            self.assertIn("Null 'content' in API response message", str(cm.exception))
 
 
 if __name__ == "__main__":

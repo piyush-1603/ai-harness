@@ -164,11 +164,17 @@ class ModelAdapter:
             raise ModelAPIError("Missing 'message' in API response choice")
 
         msg = first_choice["message"]
-        if not isinstance(msg, dict) or "content" not in msg:
-            raise ModelAPIError("Missing 'content' in API response message")
+        if not isinstance(msg, dict):
+            raise ModelAPIError("Missing 'message' in API response choice")
 
-        content = msg["content"]
-        if content is None:
+        content = msg.get("content")
+        tool_calls = msg.get("tool_calls")
+
+        if tool_calls and isinstance(tool_calls, list) and len(tool_calls) > 0:
+            content = json.dumps(msg)
+        elif content is None:
+            if "content" not in msg and "tool_calls" not in msg:
+                raise ModelAPIError("Missing 'content' in API response message")
             raise ModelAPIError("Null 'content' in API response message")
 
         usage = res_json.get("usage", {})
@@ -260,6 +266,122 @@ class ModelAdapter:
 
         if not isinstance(data, dict):
             raise ModelParseError(f"Unexpected response structure: expected JSON object, got {type(data).__name__}.")
+
+        # Unwrap choices or message wrappers if present
+        if isinstance(data.get("choices"), list) and data["choices"]:
+            first = data["choices"][0]
+            if isinstance(first, dict) and isinstance(first.get("message"), dict):
+                data = first["message"]
+        elif isinstance(data.get("message"), dict):
+            data = data["message"]
+
+        # Handle OpenAI-compatible tool_calls
+        if "tool_calls" in data:
+            tool_calls = data.get("tool_calls")
+            if tool_calls is None or (isinstance(tool_calls, list) and len(tool_calls) == 0):
+                if (
+                    data.get("content") is None
+                    and "tool_name" not in data
+                    and "action" not in data
+                    and "status" not in data
+                ):
+                    raise ModelParseError("Response has neither usable content nor tool_calls.")
+            elif not isinstance(tool_calls, list):
+                raise ModelParseError(
+                    f"Invalid 'tool_calls' in model response: expected list, got {type(tool_calls).__name__}."
+                )
+            else:
+                first_error: Optional[str] = None
+                for tc in tool_calls:
+                    if not isinstance(tc, dict):
+                        if first_error is None:
+                            first_error = f"Invalid tool call item: expected dict, got {type(tc).__name__}."
+                        continue
+
+                    call_id = tc.get("id") or tc.get("call_id")
+                    fn = tc.get("function")
+                    if isinstance(fn, dict):
+                        raw_name = fn.get("name")
+                        raw_args = fn.get("arguments")
+                    else:
+                        raw_name = tc.get("name") or tc.get("tool_name")
+                        raw_args = tc.get("arguments") or tc.get("tool_args")
+
+                    if not raw_name or not isinstance(raw_name, str):
+                        if first_error is None:
+                            first_error = "Missing or invalid tool name in tool_calls."
+                        continue
+
+                    name_clean = raw_name.strip().lower()
+
+                    if isinstance(raw_args, str):
+                        try:
+                            args = json.loads(raw_args) if raw_args.strip() else {}
+                        except json.JSONDecodeError as e:
+                            if first_error is None:
+                                first_error = f"Malformed JSON in tool_call arguments: {e.msg}"
+                            continue
+                    elif isinstance(raw_args, dict):
+                        args = raw_args
+                    elif raw_args is None:
+                        args = {}
+                    else:
+                        if first_error is None:
+                            first_error = f"Invalid tool_args type: expected dict or JSON string, got {type(raw_args).__name__}."
+                        continue
+
+                    if not isinstance(args, dict):
+                        if first_error is None:
+                            first_error = f"Invalid tool_args: expected dictionary, got {type(args).__name__}."
+                        continue
+
+                    # Check completion function
+                    if name_clean in ("complete", "finish", "done"):
+                        completion_msg = str(
+                            args.get("message")
+                            or data.get("message")
+                            or "Task completed."
+                        )
+                        return ModelCompletion(message=completion_msg)
+
+                    # Check canonical tool name
+                    try:
+                        canonical_tool = ToolName(name_clean)
+                    except ValueError:
+                        if first_error is None:
+                            first_error = f"Unknown tool name: '{raw_name}'."
+                        continue
+
+                    if call_id:
+                        final_call_id = str(call_id)
+                    else:
+                        args_repr = json.dumps(args, sort_keys=True, separators=(",", ":"))
+                        content_sig = f"{canonical_tool.value}:{args_repr}"
+                        digest = hashlib.sha256(content_sig.encode("utf-8")).hexdigest()[:12]
+                        final_call_id = f"call_{digest}"
+
+                    return ToolCall(tool_name=canonical_tool, tool_args=args, call_id=final_call_id)
+
+                if first_error:
+                    raise ModelParseError(first_error)
+                raise ModelParseError("No valid tool call found in tool_calls array.")
+
+        if (
+            "content" in data
+            and data.get("content") is None
+            and "tool_name" not in data
+            and "action" not in data
+            and "status" not in data
+        ):
+            raise ModelParseError("Response has neither usable content nor tool_calls.")
+
+        if (
+            isinstance(data.get("content"), str)
+            and "tool_name" not in data
+            and "action" not in data
+            and "status" not in data
+        ):
+            return cls.parse_decision(data["content"])
 
         # Check for completion signals
         has_completion_action = (
