@@ -10,6 +10,8 @@ from src.context.budget import (
 from src.context.builder import ContextBuilder
 from src.context.bundle import ContextBundle
 from src.context.config import ContextConfig
+from src.context.relevance import ContextCandidate, RelevanceScorer
+from src.context.packing import ContextPacker, ContextPackingReport
 from src.context.policy import (
     AdaptiveContextPolicy,
     AdaptivePolicyConfig,
@@ -42,6 +44,10 @@ __all__ = [
     "ContextBuilder",
     "ContextBundle",
     "ContextConfig",
+    "ContextCandidate",
+    "RelevanceScorer",
+    "ContextPacker",
+    "ContextPackingReport",
     "ContextBudgeter",
     "ContextBudgetConfig",
     "ContextBudgetResult",
