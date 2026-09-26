@@ -290,7 +290,7 @@ class TokenUsage:
 
 
 @dataclass
-class VerificationResult:
+class VerificationSnapshot:
     """Structured report of test or verification outcome."""
     success: bool
     summary: str
@@ -314,7 +314,7 @@ class VerificationResult:
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> VerificationResult:
+    def from_dict(cls, data: dict[str, Any]) -> VerificationSnapshot:
         return cls(
             success=bool(data["success"]),
             summary=data.get("summary", ""),
@@ -378,7 +378,7 @@ class TaskState:
     attempts: list[Attempt] = field(default_factory=list)
     failures: list[Failure] = field(default_factory=list)
     current_errors: list[str] = field(default_factory=list)
-    verification: Optional[VerificationResult] = None
+    verification: Optional[VerificationSnapshot] = None
     iteration: int = 0
     model_calls: int = 0
     tool_calls: int = 0
@@ -464,7 +464,7 @@ class TaskState:
 
         verification_data = data.get("verification")
         verification = (
-            VerificationResult.from_dict(verification_data)
+            VerificationSnapshot.from_dict(verification_data)
             if verification_data is not None
             else None
         )

@@ -17,7 +17,7 @@ from src.memory.models import (
     TaskState,
     TaskStatus,
     TokenUsage,
-    VerificationResult,
+    VerificationSnapshot,
 )
 
 
@@ -91,7 +91,7 @@ def populated_state() -> TaskState:
             ),
         ],
         current_errors=["ConnectionPoolTimeout: timeout after 30s"],
-        verification=VerificationResult(
+        verification=VerificationSnapshot(
             success=False,
             summary="1 test failed",
             tests_passed=["test_basic_query"],
@@ -360,7 +360,7 @@ def test_verification_inclusion(empty_state: TaskState) -> None:
     assert bundle_none.latest_verification_result is None
     assert "## VERIFICATION\n(None)" in bundle_none.render_text()
 
-    empty_state.verification = VerificationResult(
+    empty_state.verification = VerificationSnapshot(
         success=True,
         summary="All tests passed",
         tests_passed=["test_1", "test_2"],

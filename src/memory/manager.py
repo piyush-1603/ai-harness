@@ -18,7 +18,7 @@ from src.memory.models import (
     TaskState,
     TaskStatus,
     TokenUsage,
-    VerificationResult,
+    VerificationSnapshot,
     _normalize_paths,
     now_iso,
 )
@@ -457,12 +457,12 @@ class MemoryManager:
         )
 
     def set_verification(
-        self, result: Optional[Union[VerificationResult, dict[str, Any]]]
-    ) -> Optional[VerificationResult]:
+        self, result: Optional[Union[VerificationSnapshot, dict[str, Any]]]
+    ) -> Optional[VerificationSnapshot]:
         """Record the latest verification / test run outcome."""
         state = self.get_state()
         if isinstance(result, dict):
-            result = VerificationResult.from_dict(result)
+            result = VerificationSnapshot.from_dict(result)
 
         state.verification = result
         state.updated_at = now_iso()

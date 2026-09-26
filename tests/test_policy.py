@@ -22,7 +22,7 @@ from src.memory.models import (
     Phase,
     TaskState,
     TaskStatus,
-    VerificationResult,
+    VerificationSnapshot,
 )
 
 
@@ -105,7 +105,7 @@ def test_verify_profile() -> None:
         task_id="t1",
         task="Verify task",
         phase=Phase.VERIFY,
-        verification=VerificationResult(success=True, summary="Tests passed"),
+        verification=VerificationSnapshot(success=True, summary="Tests passed"),
     )
     repo = _make_dummy_repo_index()
 
@@ -126,7 +126,7 @@ def test_recover_profile() -> None:
         task="Recover task",
         phase=Phase.RECOVER,
         current_errors=["ConnectionError: timeout"],
-        verification=VerificationResult(success=False, summary="3 tests failed"),
+        verification=VerificationSnapshot(success=False, summary="3 tests failed"),
         failures=[Failure(error_signature="ConnectionError", summary="timed out", action="call", occurrence_count=2)],
     )
     repo = _make_dummy_repo_index()
@@ -160,7 +160,7 @@ def test_medium_pressure() -> None:
     state = TaskState(
         task_id="t1",
         task="Medium pressure task",
-        verification=VerificationResult(success=False, summary="tests failed"),
+        verification=VerificationSnapshot(success=False, summary="tests failed"),
         current_errors=["AssertionError"],
     )
     policy = AdaptiveContextPolicy()
@@ -178,7 +178,7 @@ def test_high_pressure() -> None:
     state = TaskState(
         task_id="t1",
         task="High pressure task",
-        verification=VerificationResult(success=False, summary="failed"),
+        verification=VerificationSnapshot(success=False, summary="failed"),
         attempts=[
             Attempt(id="a1", success=False, result="fail 1"),
             Attempt(id="a2", success=False, result="fail 2"),
@@ -205,12 +205,12 @@ def test_failed_verification_raising_pressure() -> None:
     state_ok = TaskState(
         task_id="t1",
         task="Task",
-        verification=VerificationResult(success=True, summary="passed"),
+        verification=VerificationSnapshot(success=True, summary="passed"),
     )
     state_fail = TaskState(
         task_id="t1",
         task="Task",
-        verification=VerificationResult(success=False, summary="failed"),
+        verification=VerificationSnapshot(success=False, summary="failed"),
     )
     policy = AdaptiveContextPolicy()
 
@@ -330,7 +330,7 @@ def test_recover_high_broader_scope_than_execute_low() -> None:
         task_id="t2",
         task="Rec",
         phase=Phase.RECOVER,
-        verification=VerificationResult(success=False, summary="failed"),
+        verification=VerificationSnapshot(success=False, summary="failed"),
         attempts=[Attempt(id=f"a{i}", success=False) for i in range(4)],
         current_errors=["Error1"],
     )
@@ -501,7 +501,7 @@ def test_integration_lifecycle_plan_execute_verify_recover(tmp_path: Path) -> No
     # 3. Stage: VERIFY (with failure)
     manager.set_phase(Phase.VERIFY)
     manager.set_verification(
-        VerificationResult(
+        VerificationSnapshot(
             success=False,
             summary="TestWebhookHMAC failed: Invalid signature",
         )

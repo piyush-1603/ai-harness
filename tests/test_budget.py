@@ -56,7 +56,7 @@ from src.memory.models import (
     TaskState,
     TaskStatus,
     TokenUsage,
-    VerificationResult,
+    VerificationSnapshot,
 )
 
 
@@ -189,7 +189,7 @@ def _build_test_task_state(
         attempts=attempts,
         failures=failures,
         current_errors=["ConnectionTimeout: upstream service took >500ms"],
-        verification=VerificationResult(
+        verification=VerificationSnapshot(
             success=False,
             summary="2 tests passed, 1 timed out",
             tests_passed=["test_login", "test_logout"],

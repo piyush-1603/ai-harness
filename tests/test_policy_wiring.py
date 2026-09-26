@@ -23,7 +23,7 @@ from src.memory.models import (
     Phase,
     TaskState,
     TaskStatus,
-    VerificationResult,
+    VerificationSnapshot,
 )
 
 
@@ -165,7 +165,7 @@ def test_disabling_verification_removes_verification_content() -> None:
         task_id="t-v1",
         task="Verification task",
         phase=Phase.VERIFY,
-        verification=VerificationResult(
+        verification=VerificationSnapshot(
             success=False,
             summary="AssertionError: expected 200 got 500",
             tests_failed=["test_api"],
@@ -473,7 +473,7 @@ def test_task_state_remains_unmodified() -> None:
         touched_files=["src/helper.py"],
         attempts=[Attempt(id="att-1", action="action", success=True)],
         failures=[Failure(error_signature="Err", summary="sum", action="act", occurrence_count=2)],
-        verification=VerificationResult(success=True, summary="passed"),
+        verification=VerificationSnapshot(success=True, summary="passed"),
         current_errors=["Err"],
     )
     initial_dict = state.to_dict()
@@ -578,7 +578,7 @@ def test_end_to_end_pipeline_integration(tmp_path: Path) -> None:
     # 3. VERIFY Phase (with failure): Verification result surfaced
     manager.set_phase(Phase.VERIFY)
     manager.set_verification(
-        VerificationResult(success=False, summary="TestAuthHMAC failed: Invalid signature")
+        VerificationSnapshot(success=False, summary="TestAuthHMAC failed: Invalid signature")
     )
     manager.set_current_errors(["SignatureVerificationError: key mismatch"])
 

@@ -16,7 +16,7 @@ from src.memory.models import (
     TaskState,
     TaskStatus,
     TokenUsage,
-    VerificationResult,
+    VerificationSnapshot,
 )
 from src.memory.storage import TaskStorage
 
@@ -351,7 +351,7 @@ def test_verification_result_storage(manager: MemoryManager) -> None:
     """Verify verification results can be stored and retrieved."""
     manager.initialize_task("task-verify", "Test verification storage")
 
-    res = VerificationResult(
+    res = VerificationSnapshot(
         success=True,
         summary="All 12 unit tests passed",
         tests_passed=["test_a", "test_b"],
@@ -402,7 +402,7 @@ def test_json_serialization_deserialization() -> None:
             )
         ],
         current_errors=["Err1: occurred"],
-        verification=VerificationResult(
+        verification=VerificationSnapshot(
             success=False,
             summary="1 test failed",
             tests_passed=["t1"],

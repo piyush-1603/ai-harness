@@ -12,7 +12,7 @@ from src.memory.models import (
     TaskState,
     TaskStatus,
     TokenUsage,
-    VerificationResult,
+    VerificationSnapshot,
     now_iso,
 )
 from src.memory.storage import TaskStorage
@@ -36,7 +36,7 @@ __all__ = [
     "Failure",
     "Discovery",
     "TokenUsage",
-    "VerificationResult",
+    "VerificationSnapshot",
     "now_iso",
     "observation_from_tool_result",
     "verification_from_report",

@@ -7,7 +7,7 @@ from src.context.packing import ContextPacker
 from src.context.builder import ContextBuilder
 from src.context.config import ContextConfig
 from src.context.budget import ContextBudgeter, ContextBudgetConfig
-from src.memory.models import TaskState, Phase, TaskStatus, Discovery, Observation, Attempt, Failure, VerificationResult, TokenUsage
+from src.memory.models import TaskState, Phase, TaskStatus, Discovery, Observation, Attempt, Failure, VerificationSnapshot, TokenUsage
 from src.context.scanner import RepositoryIndex, FileRole
 from src.context.symbols import FileSymbols, SymbolRecord
 
@@ -172,7 +172,7 @@ def test_b5_1_integration():
             Discovery("auth flow requires token", "see docs", ["src/auth.py"], 0.9),
             Discovery("repo uses pytest", "see setup", [], 0.5)
         ],
-        verification=VerificationResult(False, "tests failed", 10, 2, "details")
+        verification=VerificationSnapshot(False, "tests failed", 10, 2, "details")
     )
     
     repo = RepositoryIndex(root_dir=".")

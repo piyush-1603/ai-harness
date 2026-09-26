@@ -18,7 +18,7 @@ from src.memory.models import (
     Observation,
     TaskState,
     TokenUsage,
-    VerificationResult,
+    VerificationSnapshot,
 )
 
 from src.context.relevance import ContextCandidate, RelevanceScorer
@@ -382,7 +382,7 @@ class ContextBuilder:
         
         out_verif = None
         if any(c.category == "verification_result" for c in selected):
-            out_verif = VerificationResult(
+            out_verif = VerificationSnapshot(
                 success=latest_verification.success,
                 summary=latest_verification.summary,
                 tests_passed=latest_verification.tests_passed,

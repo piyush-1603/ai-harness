@@ -309,5 +309,49 @@ class TestVerificationEngine(unittest.TestCase):
         self.assertIn("exit code 42", report.summary)
 
 
+
+    def test_adapt_verification_report(self):
+        from src.verification.verifier import adapt_verification_report
+        from src.common.types import VerificationResult, VerificationReport, VerificationStatus, FailureClassification
+        
+        # Test passing report
+        pass_report = VerificationReport(
+            status=VerificationStatus.PASSED,
+            is_verified=True,
+            tests_passed=True,
+            test_command="pytest",
+            test_output="All tests passed successfully",
+            files_modified=["app.py"],
+            git_diff="some diff",
+            failure_classification=None,
+            syntax_valid=True,
+            summary="Success"
+        )
+        pass_result = adapt_verification_report(pass_report)
+        self.assertTrue(pass_result.passed)
+        self.assertEqual(pass_result.failing_tests, [])
+        self.assertEqual(pass_result.stdout, "All tests passed successfully")
+        self.assertEqual(pass_result.stderr, "")
+        
+        # Test failing report
+        fail_report = VerificationReport(
+            status=VerificationStatus.FAILED,
+            is_verified=False,
+            tests_passed=False,
+            test_command="pytest",
+            test_output="AssertionError: 1 != 2",
+            files_modified=["app.py"],
+            git_diff="some diff",
+            failure_classification=FailureClassification.ASSERTION_FAILED,
+            syntax_valid=True,
+            summary="Failure"
+        )
+        fail_result = adapt_verification_report(fail_report)
+        self.assertFalse(fail_result.passed)
+        self.assertEqual(fail_result.failing_tests, [])
+        self.assertEqual(fail_result.stdout, "AssertionError: 1 != 2")
+        self.assertEqual(fail_result.stderr, "AssertionError: 1 != 2")
+
 if __name__ == "__main__":
     unittest.main()
+
