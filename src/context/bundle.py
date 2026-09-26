@@ -22,7 +22,7 @@ from src.memory.models import (
 class ContextBundle:
     """
     Compact, structured context package derived deterministically from TaskState.
-    Acts as the immutable presentation layer for model input and telemetry.
+    Acts as the derived presentation layer for model input and telemetry.
     """
     task: str
     phase: Phase
@@ -176,7 +176,17 @@ class ContextBundle:
         else:
             sections.append("## RECENT OBSERVATIONS\n(None)")
 
-        # 8. FAILED ATTEMPTS
+        # 8. RECENT SUCCESSFUL ATTEMPTS
+        if self.recent_attempts:
+            succ_lines: list[str] = []
+            for a in self.recent_attempts:
+                res_suffix = f" -> {a.result}" if a.result else ""
+                succ_lines.append(f"- Attempt {a.id} (iter {a.iteration}): {a.action}{res_suffix}")
+            sections.append("## RECENT SUCCESSFUL ATTEMPTS\n" + "\n".join(succ_lines))
+        else:
+            sections.append("## RECENT SUCCESSFUL ATTEMPTS\n(None)")
+
+        # 9. FAILED ATTEMPTS
         if self.failed_attempts:
             att_lines: list[str] = []
             for a in self.failed_attempts:

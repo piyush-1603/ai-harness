@@ -33,7 +33,7 @@ class ContextBuilder:
         config: Optional[ContextConfig] = None,
     ) -> ContextBundle:
         """
-        Derives an immutable, model-ready ContextBundle from the given state.
+        Derives a model-ready ContextBundle from the given state.
         Guarantees that state_or_manager is not mutated.
         """
         if hasattr(state_or_manager, "get_state"):
@@ -47,7 +47,7 @@ class ContextBuilder:
 
         cfg = config or self.config
 
-        # 1. Base Task & Lifecycle (copies/immutable primitives)
+        # 1. Base Task & Lifecycle (copies of primitives/collections)
         task = state.task
         phase = state.phase
         status = state.status
@@ -56,7 +56,12 @@ class ContextBuilder:
         relevant_files = list(state.relevant_files)
         touched_files = list(state.touched_files)
 
-        # 2. Discoveries (stable learned facts)
+        # 2. Discoveries (stable learned facts, bounded by max_discoveries)
+        disc_slice = (
+            state.discoveries[-cfg.max_discoveries :]
+            if cfg.max_discoveries > 0
+            else []
+        )
         important_discoveries = [
             Discovery(
                 statement=d.statement,
@@ -65,7 +70,7 @@ class ContextBuilder:
                 confidence=d.confidence,
                 timestamp=d.timestamp,
             )
-            for d in state.discoveries
+            for d in disc_slice
         ]
 
         # 3. Recent Observations (recency limited, raw_output omitted by default)
@@ -86,34 +91,13 @@ class ContextBuilder:
             for o in obs_slice
         ]
 
-        # 4. Attempts (recency limited, distinguishing failed attempts)
+        # 4. Attempts (recency limited, mutually exclusive failed vs successful)
         attempts_slice = (
             state.attempts[-cfg.max_attempts :]
             if cfg.max_attempts > 0
             else []
         )
-        cloned_recent_attempts = [
-            Attempt(
-                id=a.id,
-                hypothesis=a.hypothesis,
-                action=a.action,
-                files_touched=list(a.files_touched),
-                result=a.result,
-                success=a.success,
-                iteration=a.iteration,
-                timestamp=a.timestamp,
-            )
-            for a in attempts_slice
-        ]
 
-        if cfg.include_successful_attempts:
-            recent_attempts = list(cloned_recent_attempts)
-        else:
-            recent_attempts = [a for a in cloned_recent_attempts if not a.success]
-
-        # Failed attempts clearly distinguished (from recent attempts, or all failed attempts up to limit)
-        all_failed = [a for a in state.attempts if not a.success]
-        failed_slice = all_failed[-cfg.max_attempts :] if cfg.max_attempts > 0 else []
         failed_attempts = [
             Attempt(
                 id=a.id,
@@ -125,8 +109,27 @@ class ContextBuilder:
                 iteration=a.iteration,
                 timestamp=a.timestamp,
             )
-            for a in failed_slice
+            for a in attempts_slice
+            if not a.success
         ]
+
+        if cfg.include_successful_attempts:
+            recent_attempts = [
+                Attempt(
+                    id=a.id,
+                    hypothesis=a.hypothesis,
+                    action=a.action,
+                    files_touched=list(a.files_touched),
+                    result=a.result,
+                    success=a.success,
+                    iteration=a.iteration,
+                    timestamp=a.timestamp,
+                )
+                for a in attempts_slice
+                if a.success
+            ]
+        else:
+            recent_attempts = []
 
         # 5. Repeated Failures (occurrence_count >= min_failure_occurrences)
         repeated_failures = [

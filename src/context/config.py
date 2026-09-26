@@ -13,6 +13,7 @@ class ContextConfig:
     """
     max_observations: int = 8
     max_attempts: int = 5
+    max_discoveries: int = 12
     include_raw_output: bool = False
     include_successful_attempts: bool = True
     min_failure_occurrences: int = 2
@@ -21,6 +22,7 @@ class ContextConfig:
         return {
             "max_observations": self.max_observations,
             "max_attempts": self.max_attempts,
+            "max_discoveries": self.max_discoveries,
             "include_raw_output": self.include_raw_output,
             "include_successful_attempts": self.include_successful_attempts,
             "min_failure_occurrences": self.min_failure_occurrences,
@@ -31,6 +33,7 @@ class ContextConfig:
         return cls(
             max_observations=int(data.get("max_observations", 8)),
             max_attempts=int(data.get("max_attempts", 5)),
+            max_discoveries=int(data.get("max_discoveries", 12)),
             include_raw_output=bool(data.get("include_raw_output", False)),
             include_successful_attempts=bool(data.get("include_successful_attempts", True)),
             min_failure_occurrences=int(data.get("min_failure_occurrences", 2)),

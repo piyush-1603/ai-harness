@@ -147,8 +147,10 @@ def test_populated_task_state(populated_state: TaskState) -> None:
     assert bundle.touched_files == ["src/db/session.py"]
     assert len(bundle.important_discoveries) == 1
     assert len(bundle.recent_observations) == 1
-    assert len(bundle.recent_attempts) == 2
+    assert len(bundle.recent_attempts) == 1
+    assert bundle.recent_attempts[0].id == "att-2"
     assert len(bundle.failed_attempts) == 1
+    assert bundle.failed_attempts[0].id == "att-1"
     assert len(bundle.repeated_failures) == 1
     assert bundle.current_errors == ["ConnectionPoolTimeout: timeout after 30s"]
     assert bundle.latest_verification_result is not None
@@ -167,6 +169,7 @@ def test_populated_task_state(populated_state: TaskState) -> None:
         "## RELEVANT FILES",
         "## DISCOVERIES",
         "## RECENT OBSERVATIONS",
+        "## RECENT SUCCESSFUL ATTEMPTS",
         "## FAILED ATTEMPTS",
         "## REPEATED FAILURES",
         "## CURRENT ERRORS",
@@ -198,8 +201,38 @@ def test_observation_recency_limits(empty_state: TaskState) -> None:
     assert default_bundle.recent_observations[-1].summary == "Observation 11"
 
 
+def test_discovery_recency_limits(empty_state: TaskState) -> None:
+    """Verify discoveries are bounded by max_discoveries with non-positive values returning none."""
+    for i in range(20):
+        empty_state.discoveries.append(
+            Discovery(statement=f"Discovery {i}", evidence=f"evidence {i}")
+        )
+
+    # Default max_discoveries = 12
+    builder = ContextBuilder()
+    bundle = builder.build(empty_state)
+    assert len(bundle.important_discoveries) == 12
+    assert bundle.important_discoveries[0].statement == "Discovery 8"
+    assert bundle.important_discoveries[-1].statement == "Discovery 19"
+
+    # Custom max_discoveries = 4
+    bundle_4 = builder.build(empty_state, config=ContextConfig(max_discoveries=4))
+    assert len(bundle_4.important_discoveries) == 4
+    assert [d.statement for d in bundle_4.important_discoveries] == [
+        "Discovery 16", "Discovery 17", "Discovery 18", "Discovery 19"
+    ]
+
+    # Non-positive max_discoveries <= 0 yields no discoveries
+    bundle_0 = builder.build(empty_state, config=ContextConfig(max_discoveries=0))
+    assert len(bundle_0.important_discoveries) == 0
+    assert "## DISCOVERIES\n(None)" in bundle_0.render_text()
+
+    bundle_neg = builder.build(empty_state, config=ContextConfig(max_discoveries=-5))
+    assert len(bundle_neg.important_discoveries) == 0
+
+
 def test_attempt_recency_limits(empty_state: TaskState) -> None:
-    """Verify only the most recent N attempts are included."""
+    """Verify only the most recent N attempts are considered and partitioned mutually exclusively."""
     for i in range(10):
         empty_state.attempts.append(
             Attempt(id=f"att-{i}", action=f"Action {i}", result=f"Res {i}", success=(i % 2 == 0))
@@ -208,13 +241,15 @@ def test_attempt_recency_limits(empty_state: TaskState) -> None:
     builder = ContextBuilder(ContextConfig(max_attempts=3))
     bundle = builder.build(empty_state)
 
-    assert len(bundle.recent_attempts) == 3
-    ids = [a.id for a in bundle.recent_attempts]
-    assert ids == ["att-7", "att-8", "att-9"]
+    # Last 3 attempts are att-7 (fail), att-8 (success), att-9 (fail)
+    assert [a.id for a in bundle.recent_attempts] == ["att-8"]
+    assert [a.id for a in bundle.failed_attempts] == ["att-7", "att-9"]
+    # Total attempts across both collections equals max_attempts
+    assert len(bundle.recent_attempts) + len(bundle.failed_attempts) == 3
 
 
 def test_separation_of_failed_and_successful_attempts(empty_state: TaskState) -> None:
-    """Verify failed attempts are clearly separated from successful attempts."""
+    """Verify mutual exclusivity: no attempt appears in both recent_attempts and failed_attempts."""
     empty_state.attempts = [
         Attempt(id="att-1", action="A1", success=False, result="failed 1"),
         Attempt(id="att-2", action="A2", success=True, result="success 2"),
@@ -225,19 +260,33 @@ def test_separation_of_failed_and_successful_attempts(empty_state: TaskState) ->
     builder = ContextBuilder()
     bundle = builder.build(empty_state)
 
+    # Failed attempts: only failed
     assert len(bundle.failed_attempts) == 2
     assert all(not a.success for a in bundle.failed_attempts)
     assert [a.id for a in bundle.failed_attempts] == ["att-1", "att-3"]
 
-    assert len(bundle.successful_attempts) == 2
-    assert all(a.success for a in bundle.successful_attempts)
-    assert [a.id for a in bundle.successful_attempts] == ["att-2", "att-4"]
+    # Recent attempts: only successful when include_successful_attempts=True
+    assert len(bundle.recent_attempts) == 2
+    assert all(a.success for a in bundle.recent_attempts)
+    assert [a.id for a in bundle.recent_attempts] == ["att-2", "att-4"]
 
-    # Test with include_successful_attempts=False
+    # Mutual exclusivity: intersection of IDs is empty
+    failed_ids = {a.id for a in bundle.failed_attempts}
+    successful_ids = {a.id for a in bundle.recent_attempts}
+    assert failed_ids.isdisjoint(successful_ids)
+
+    # Verify rendering of successful attempts
+    text = bundle.render_text()
+    assert "## RECENT SUCCESSFUL ATTEMPTS" in text
+    assert "- Attempt att-2 (iter 0): A2 -> success 2" in text
+    assert "- Attempt att-4 (iter 0): A4 -> success 4" in text
+
+    # When include_successful_attempts=False, recent_attempts must be empty
     cfg = ContextConfig(include_successful_attempts=False)
     bundle_no_success = builder.build(empty_state, config=cfg)
-    assert len(bundle_no_success.recent_attempts) == 2
-    assert all(not a.success for a in bundle_no_success.recent_attempts)
+    assert bundle_no_success.recent_attempts == []
+    assert len(bundle_no_success.failed_attempts) == 2
+    assert "## RECENT SUCCESSFUL ATTEMPTS\n(None)" in bundle_no_success.render_text()
 
 
 def test_repeated_failure_inclusion(empty_state: TaskState) -> None:
