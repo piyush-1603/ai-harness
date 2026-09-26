@@ -183,16 +183,16 @@ def test_b2_realistic_memory_to_context_bundle_integration(tmp_path: Path) -> No
     for o in bundle.recent_observations:
         assert o.raw_output is None
 
-    # Verify Attempt Recency (default max_attempts=5 out of 6, mutually exclusive)
-    # The last 5 attempts are: att-2 (fail), att-3 (succ), att-4 (succ), att-5 (fail), att-6 (succ)
+    # Verify Attempt Recency (default max_attempts=5 per category)
+    # 3 successful attempts exist: att-3, att-4, att-6
     assert len(bundle.recent_attempts) == 3
     assert [a.id for a in bundle.recent_attempts] == ["att-3", "att-4", "att-6"]
     assert all(a.success for a in bundle.recent_attempts)
 
-    # Verify Failed Attempts (only failed attempts in the recent window)
-    assert len(bundle.failed_attempts) == 2
+    # Verify Failed Attempts (independent window: all 3 failed attempts retained)
+    assert len(bundle.failed_attempts) == 3
     assert all(not a.success for a in bundle.failed_attempts)
-    assert [a.id for a in bundle.failed_attempts] == ["att-2", "att-5"]
+    assert [a.id for a in bundle.failed_attempts] == ["att-1", "att-2", "att-5"]
 
     # Mutual exclusivity: no attempt in both collections
     recent_ids = {a.id for a in bundle.recent_attempts}

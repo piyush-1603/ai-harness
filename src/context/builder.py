@@ -153,14 +153,10 @@ class ContextBuilder:
             for o in obs_slice
         ]
 
-        # 4. Attempts (recency limited, mutually exclusive failed vs successful)
-        attempts_slice = (
-            state.attempts[-cfg.max_attempts :]
-            if cfg.max_attempts > 0
-            else []
-        )
-
+        # 4. Attempts (independent bounded recency for failed vs successful attempts)
         if cfg.include_failed_attempts and cfg.max_attempts > 0:
+            all_failed = [a for a in state.attempts if not a.success]
+            failed_slice = all_failed[-cfg.max_attempts :]
             failed_attempts = [
                 Attempt(
                     id=a.id,
@@ -172,13 +168,14 @@ class ContextBuilder:
                     iteration=a.iteration,
                     timestamp=a.timestamp,
                 )
-                for a in attempts_slice
-                if not a.success
+                for a in failed_slice
             ]
         else:
             failed_attempts = []
 
         if cfg.include_successful_attempts and cfg.max_attempts > 0:
+            all_successful = [a for a in state.attempts if a.success]
+            successful_slice = all_successful[-cfg.max_attempts :]
             recent_attempts = [
                 Attempt(
                     id=a.id,
@@ -190,8 +187,7 @@ class ContextBuilder:
                     iteration=a.iteration,
                     timestamp=a.timestamp,
                 )
-                for a in attempts_slice
-                if a.success
+                for a in successful_slice
             ]
         else:
             recent_attempts = []

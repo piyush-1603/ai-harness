@@ -241,11 +241,11 @@ def test_attempt_recency_limits(empty_state: TaskState) -> None:
     builder = ContextBuilder(ContextConfig(max_attempts=3))
     bundle = builder.build(empty_state)
 
-    # Last 3 attempts are att-7 (fail), att-8 (success), att-9 (fail)
-    assert [a.id for a in bundle.recent_attempts] == ["att-8"]
-    assert [a.id for a in bundle.failed_attempts] == ["att-7", "att-9"]
-    # Total attempts across both collections equals max_attempts
-    assert len(bundle.recent_attempts) + len(bundle.failed_attempts) == 3
+    # Independent recency windows: last 3 successful and last 3 failed attempts
+    assert [a.id for a in bundle.recent_attempts] == ["att-4", "att-6", "att-8"]
+    assert [a.id for a in bundle.failed_attempts] == ["att-5", "att-7", "att-9"]
+    assert len(bundle.recent_attempts) == 3
+    assert len(bundle.failed_attempts) == 3
 
 
 def test_separation_of_failed_and_successful_attempts(empty_state: TaskState) -> None:
