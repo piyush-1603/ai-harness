@@ -45,6 +45,17 @@ from src.memory.models import (
     Observation,
     TaskState,
     TaskStatus,
+    Phase,
+)
+from src.context.policy import AdaptiveContextPolicy
+from src.context.budget import ContextBudgeter
+from src.context.scanner import RepositoryScanner, RepositoryIndex
+from src.verification.verifier import VerificationEngine
+from src.memory.adapters import (
+    observation_from_tool_result,
+    attempt_from_tool_result,
+    verification_from_report,
+    failure_from_verification_report,
 )
 from src.orchestrator.model_adapter import (
     ModelAdapter,
@@ -114,7 +125,7 @@ class Orchestrator:
         """
         self.context = context
         self.tool_engine = tool_engine
-        self.verifier = verifier
+        self.verifier = verifier or VerificationEngine()
         self.model = model
         self.tools = tools
         self.config = config or OrchestratorConfig()
@@ -142,6 +153,8 @@ class Orchestrator:
         # Memory and Context systems
         self.memory_manager = memory_manager or MemoryManager()
         self.context_builder = context_builder or ContextBuilder()
+        self.context_policy = AdaptiveContextPolicy()
+        self.context_budgeter = ContextBudgeter()
 
         # Legacy and state tracking
         self.state = State.EXPLORING
@@ -183,6 +196,9 @@ class Orchestrator:
             task_id=task_spec.issue_id,
             task=task_spec.issue_description,
         )
+        self.memory_manager.set_phase(Phase.PLAN)
+        
+        repo_index = RepositoryScanner().scan(task_spec.workspace_dir)
 
         if self.context is None:
             self.context = StubContext()
@@ -206,10 +222,15 @@ class Orchestrator:
             self.memory_manager.increment_iteration()
 
             # 1. Build context from MemoryManager and accumulated interaction state
-            context_bundle = self.context_builder.build(self.memory_manager)
+            profile = self.context_policy.evaluate(self.memory_manager, repo_index=repo_index)
+            budget_result = self.context_budgeter.fit(
+                state=self.memory_manager,
+                config=profile,
+                repository_index=repo_index,
+            )
             turn_prompt = self._build_turn_prompt(
                 task_spec=task_spec,
-                context_bundle=context_bundle,
+                context_text=budget_result.text,
                 last_tool_call=last_tool_call,
                 last_tool_result=last_tool_result,
             )
@@ -275,21 +296,51 @@ class Orchestrator:
                         summary=f"Model completion: {decision.message}",
                     )
                 )
-                # Slice 3: Terminate loop with completion state. Verification hard gate is subsequent step.
-                return self._make_report(
-                    status="completed",
-                    step_count=step_count,
-                    task_spec=task_spec,
-                    completion_message=decision.message,
-                    start_time=start_time,
-                    tool_call_counts=tool_call_counts,
-                    files_inspected=files_inspected,
-                    files_modified=files_modified,
-                    prompt_tokens=prompt_tokens_accum,
-                    completion_tokens=completion_tokens_accum,
+                self.memory_manager.set_phase(Phase.VERIFY)
+                verification_report = self.verifier.verify(
+                    workspace_dir=task_spec.workspace_dir,
+                    test_command=task_spec.test_command,
                 )
+                
+                memory_verification = verification_from_report(verification_report)
+                self.memory_manager.set_verification(memory_verification)
+                
+                failure = failure_from_verification_report(verification_report)
+                if failure:
+                    self.memory_manager.add_failure(failure)
+                    if verification_report.failure_classification:
+                        self.memory_manager.set_current_errors([verification_report.failure_classification.value])
+                    elif verification_report.summary:
+                        self.memory_manager.set_current_errors([verification_report.summary])
+                    self.memory_manager.set_phase(Phase.RECOVER)
+                    
+                    last_tool_call = None
+                    last_tool_result = ToolResult(
+                        tool_name=ToolName.RUN_BASH,
+                        success=False,
+                        output=(verification_report.summary or "") + "\n" + (verification_report.test_output or ""),
+                        error="Verification failed."
+                    )
+                    continue
+                else:
+                    self.memory_manager.set_current_errors([])
+                    self.memory_manager.set_status(TaskStatus.DONE)
+                    
+                    return self._make_report(
+                        status="completed",
+                        step_count=step_count,
+                        task_spec=task_spec,
+                        completion_message=decision.message,
+                        start_time=start_time,
+                        tool_call_counts=tool_call_counts,
+                        files_inspected=files_inspected,
+                        files_modified=files_modified,
+                        prompt_tokens=prompt_tokens_accum,
+                        completion_tokens=completion_tokens_accum,
+                    )
 
             elif isinstance(decision, ToolCall):
+                self.memory_manager.set_phase(Phase.EXECUTE)
                 call_name = decision.tool_name.value
                 tool_call_counts[call_name] = tool_call_counts.get(call_name, 0) + 1
 
@@ -372,7 +423,7 @@ class Orchestrator:
     def _build_turn_prompt(
         self,
         task_spec: TaskSpec,
-        context_bundle: ContextBundle,
+        context_text: str,
         last_tool_call: Optional[ToolCall] = None,
         last_tool_result: Optional[ToolResult] = None,
         recovery_hint: Optional[str] = None,
@@ -399,7 +450,7 @@ class Orchestrator:
             "For completion:",
             '{"action": "complete", "message": "<resolution description>"}',
             "",
-            context_bundle.render_text(),
+            context_text,
         ]
 
         if last_tool_call is not None and last_tool_result is not None:
@@ -462,7 +513,7 @@ class Orchestrator:
             "cost": self.cost,
             "last_error": last_error,
             "message": completion_message or ("Task completed." if status == "completed" else ""),
-            "verified": False,
+            "verified": (status in ("completed", "resolved")) if self.memory_manager.get_state().status == TaskStatus.DONE else False,
             "scratchpad": sp,
             "telemetry": telemetry,
         }
