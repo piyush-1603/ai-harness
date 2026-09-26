@@ -235,6 +235,15 @@ class TestModelAdapterMockMode(unittest.TestCase):
                 adapter.call_model("test prompt")
             self.assertIn("AI_API_KEY is not set", str(cm.exception))
 
+    def test_mock_mode_not_inferred_from_environment(self):
+        # HARNESS_MOCK_MODE=true must not activate mock mode
+        with patch.dict("os.environ", {"HARNESS_MOCK_MODE": "true"}, clear=True):
+            adapter = ModelAdapter()
+            self.assertFalse(adapter.mock_mode)
+            with self.assertRaises(ModelAPIError) as cm:
+                adapter.call_model("test prompt")
+            self.assertIn("AI_API_KEY is not set", str(cm.exception))
+
     def test_mock_mode_sequential_responses(self):
         responses = [
             '{"tool_name": "read_file", "tool_args": {"path": "main.py"}}',

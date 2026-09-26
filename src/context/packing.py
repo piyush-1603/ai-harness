@@ -71,14 +71,22 @@ class ContextPacker:
                 "category": c.category,
                 "score": c.score,
                 "priority_tier": c.priority_tier,
-                "estimated_tokens": c.estimated_tokens
+                "estimated_tokens": c.estimated_tokens,
+                "files": list(c.files),
+                "recency_index": c.recency_index,
+                "scoring_reasons": list(c.scoring_reasons),
+                "decision_reason": "selected_within_budget"
             } for c in selected_candidates],
             skipped=[{
                 "id": c.id,
                 "category": c.category,
                 "score": c.score,
                 "priority_tier": c.priority_tier,
-                "estimated_tokens": c.estimated_tokens
+                "estimated_tokens": c.estimated_tokens,
+                "files": list(c.files),
+                "recency_index": c.recency_index,
+                "scoring_reasons": list(c.scoring_reasons),
+                "decision_reason": "no_optional_budget" if candidate_budget <= 0 else "insufficient_remaining_budget"
             } for c in skipped_candidates],
         )
         

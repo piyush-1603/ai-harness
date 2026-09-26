@@ -11,10 +11,6 @@ Manages the core autonomous coding loop, coordinating:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from src.common.types import ToolResult, ScratchpadState, VerificationResult
-from src.common.types import ToolCall, ToolName
-from src.orchestrator.model_adapter import ModelCompletion
-
 from enum import Enum, auto
 import json
 import logging
@@ -33,29 +29,30 @@ from src.common.types import (
     ToolCall,
     ToolName,
     ToolResult,
+    VerificationReport,
     VerificationResult,
+    VerificationStatus,
 )
+from src.context.budget import ContextBudgeter
 from src.context.builder import ContextBuilder
 from src.context.bundle import ContextBundle
 from src.context.config import ContextConfig
+from src.context.policy import AdaptiveContextPolicy
+from src.context.scanner import RepositoryIndex, RepositoryScanner
+from src.memory.adapters import (
+    attempt_from_tool_result,
+    failure_from_verification_report,
+    observation_from_tool_result,
+    verification_from_report,
+)
 from src.memory.manager import MemoryManager
 from src.memory.models import (
     Attempt,
     Failure,
     Observation,
+    Phase,
     TaskState,
     TaskStatus,
-    Phase,
-)
-from src.context.policy import AdaptiveContextPolicy
-from src.context.budget import ContextBudgeter
-from src.context.scanner import RepositoryScanner, RepositoryIndex
-from src.verification.verifier import VerificationEngine
-from src.memory.adapters import (
-    observation_from_tool_result,
-    attempt_from_tool_result,
-    verification_from_report,
-    failure_from_verification_report,
 )
 from src.orchestrator.model_adapter import (
     ModelAdapter,
@@ -78,20 +75,6 @@ class OrchestratorConfig(BaseModel):
     instance_template: str = ""
 
 
-class StubContext:
-    def __init__(self):
-        self._state = ScratchpadState()
-
-    def get_scratchpad(self) -> ScratchpadState:
-        return self._state
-
-    def update_scratchpad(self, hypothesis: str = None, attempt: str = None):
-        if hypothesis:
-            self._state.hypothesis = hypothesis
-        if attempt:
-            self._state.attempt_history.append(attempt)
-
-
 # ---------------------------------------------------------------------------
 # State machine for legacy stub compatibility
 # ---------------------------------------------------------------------------
@@ -102,6 +85,24 @@ class State(Enum):
     TESTING = auto()
     DONE = auto()
     ESCALATE = auto()
+
+
+class _LegacyContext:
+    """Internal context fallback for legacy test harness backward compatibility."""
+
+    def __init__(self) -> None:
+        self._state = ScratchpadState()
+
+    def get_scratchpad(self) -> ScratchpadState:
+        return self._state
+
+    def update_scratchpad(
+        self, hypothesis: Optional[str] = None, attempt: Optional[str] = None
+    ) -> None:
+        if hypothesis:
+            self._state.hypothesis = hypothesis
+        if attempt:
+            self._state.attempt_history.append(attempt)
 
 
 class Orchestrator:
@@ -126,8 +127,7 @@ class Orchestrator:
         config: OrchestratorConfig holding step_limit, cost_limit, templates
         """
         self.context = context
-        self.tool_engine = tool_engine
-        self.verifier = verifier or VerificationEngine()
+        self.verifier = verifier if verifier is not None else VerificationEngine()
         self.model = model
         self.tools = tools
         self.config = config or OrchestratorConfig()
@@ -191,8 +191,9 @@ class Orchestrator:
             task_id=task_spec.issue_id,
             task=task_spec.issue_description,
         )
+        self.memory_manager.set_hypothesis(f"Investigating: {task_spec.issue_description}")
         self.memory_manager.set_phase(Phase.PLAN)
-        
+
         repo_index = RepositoryScanner().scan(task_spec.workspace_dir)
 
         step_count = 0
@@ -346,23 +347,73 @@ class Orchestrator:
                         output=bounded_output,
                         error=None,
                     )
-                    continue
-                else:
+
+                is_verified = bool(verification_report and verification_report.is_verified)
+
+                # Record verification into MemoryManager via typed adapters
+                if verification_report is not None:
+                    v_res = verification_from_report(verification_report)
+                    self.memory_manager.set_verification(v_res)
+                    fail = failure_from_verification_report(verification_report)
+                    if fail is not None:
+                        self.memory_manager.add_failure(fail)
+                        if verification_report.failure_classification:
+                            self.memory_manager.set_current_errors([verification_report.failure_classification.value])
+                        elif verification_report.summary:
+                            self.memory_manager.set_current_errors([verification_report.summary])
+                        self.memory_manager.record_observation(
+                            Observation(
+                                type="verification_failure",
+                                source="verification_engine",
+                                summary=verification_report.summary,
+                                raw_output=verification_report.test_output,
+                                files=verification_report.files_modified,
+                            )
+                        )
+                        failing_items = (
+                            [verification_report.failure_classification.value]
+                            if verification_report.failure_classification
+                            else []
+                        )
+                        self.recovery_manager.analyze_failure(
+                            failing_items,
+                            verification_report.test_output or verification_report.summary,
+                        )
+                    else:
+                        self.memory_manager.record_observation(
+                            Observation(
+                                type="verification_success",
+                                source="verification_engine",
+                                summary=verification_report.summary,
+                                raw_output=verification_report.test_output,
+                                files=verification_report.files_modified,
+                            )
+                        )
+
+                if is_verified:
+                    final_status = "completed"
                     self.memory_manager.set_current_errors([])
                     self.memory_manager.set_status(TaskStatus.DONE)
-                    
-                    return self._make_report(
-                        status="completed",
-                        step_count=step_count,
-                        task_spec=task_spec,
-                        completion_message=decision.message,
-                        start_time=start_time,
-                        tool_call_counts=tool_call_counts,
-                        files_inspected=files_inspected,
-                        files_modified=files_modified,
-                        prompt_tokens=prompt_tokens_accum,
-                        completion_tokens=completion_tokens_accum,
-                    )
+                else:
+                    final_status = "failed"
+                    self.memory_manager.set_phase(Phase.RECOVER)
+
+                return self._make_report(
+                    status=final_status,
+                    step_count=step_count,
+                    task_spec=task_spec,
+                    completion_message=decision.message,
+                    last_error=self.last_error,
+                    verified=is_verified,
+                    verification_report=verification_report,
+                    verification_error=verification_error,
+                    start_time=start_time,
+                    tool_call_counts=tool_call_counts,
+                    files_inspected=files_inspected,
+                    files_modified=files_modified,
+                    prompt_tokens=prompt_tokens_accum,
+                    completion_tokens=completion_tokens_accum,
+                )
 
             elif isinstance(decision, ToolCall):
                 self.memory_manager.set_phase(Phase.EXECUTE)
@@ -377,11 +428,18 @@ class Orchestrator:
                 # Track inspected/modified paths
                 arg_path = decision.tool_args.get("path")
                 if arg_path and isinstance(arg_path, str):
-                    if decision.tool_name in (ToolName.READ_FILE, ToolName.GREP_SEARCH, ToolName.LIST_DIRECTORY):
+                    if decision.tool_name in (
+                        ToolName.READ_FILE,
+                        ToolName.LIST_DIRECTORY,
+                        ToolName.GREP_SEARCH,
+                    ):
                         if arg_path not in files_inspected:
                             files_inspected.append(arg_path)
                             self.memory_manager.add_relevant_file(arg_path)
-                    elif decision.tool_name in (ToolName.EDIT_FILE, ToolName.WRITE_FILE):
+                    elif decision.tool_name in (
+                        ToolName.WRITE_FILE,
+                        ToolName.EDIT_FILE,
+                    ):
                         if arg_path not in files_modified:
                             files_modified.append(arg_path)
                             self.memory_manager.add_touched_file(arg_path)
@@ -429,6 +487,7 @@ class Orchestrator:
             step_count=step_count,
             task_spec=task_spec,
             last_error=self.last_error or "Exceeded HARNESS_MAX_STEPS limit",
+            verified=False,
             start_time=start_time,
             tool_call_counts=tool_call_counts,
             files_inspected=files_inspected,
@@ -440,11 +499,13 @@ class Orchestrator:
     def _build_turn_prompt(
         self,
         task_spec: TaskSpec,
-        context_text: str,
+        context_text: Optional[str] = None,
+        context_bundle: Optional[ContextBundle] = None,
         last_tool_call: Optional[ToolCall] = None,
         last_tool_result: Optional[ToolResult] = None,
         recovery_hint: Optional[str] = None,
     ) -> str:
+        ctx_str = context_text if context_text is not None else (context_bundle.render_text() if context_bundle is not None else "")
         prompt_parts: list[str] = [
             "You are an autonomous AI coding agent. You can explore a repository, edit files, and run tests.",
             "Your goal is to fix the issue described and verify your changes.",
@@ -467,7 +528,7 @@ class Orchestrator:
             "For completion:",
             '{"action": "complete", "message": "<resolution description>"}',
             "",
-            context_text,
+            ctx_str,
         ]
 
         if last_tool_call is not None and last_tool_result is not None:
@@ -494,6 +555,34 @@ class Orchestrator:
 
         return "\n".join(prompt_parts)
 
+    def _build_scratchpad_from_memory(self, task_spec: Optional[TaskSpec] = None) -> ScratchpadState:
+        try:
+            mem_state = self.memory_manager.get_state()
+        except Exception:
+            mem_state = None
+
+        if mem_state is not None:
+            hypothesis = mem_state.current_hypothesis or ""
+            identified = list(mem_state.relevant_files)
+            touched = list(mem_state.touched_files)
+            task_summary = mem_state.task
+            attempt_history = [
+                f"{a.action} -> {'success' if a.success else 'failure'}: {a.result}"
+                for a in mem_state.attempts
+            ]
+            return ScratchpadState(
+                task_summary=task_summary,
+                identified_files=identified,
+                active_hypothesis=hypothesis,
+                files_modified=touched,
+                hypothesis=hypothesis,
+                files_touched=touched,
+                attempt_history=attempt_history,
+            )
+
+        summary = task_spec.issue_description if task_spec else ""
+        return ScratchpadState(task_summary=summary)
+
     def _make_report(
         self,
         status: str,
@@ -501,6 +590,9 @@ class Orchestrator:
         task_spec: TaskSpec,
         completion_message: Optional[str] = None,
         last_error: Optional[str] = None,
+        verified: bool = False,
+        verification_report: Optional[VerificationReport] = None,
+        verification_error: Optional[str] = None,
         start_time: float = 0.0,
         tool_call_counts: Optional[Dict[str, int]] = None,
         files_inspected: Optional[List[str]] = None,
@@ -509,7 +601,20 @@ class Orchestrator:
         completion_tokens: int = 0,
     ) -> dict:
         wall_time = time.perf_counter() - start_time if start_time > 0 else 0.0
-        sp = self.context.get_scratchpad() if hasattr(self.context, "get_scratchpad") else ScratchpadState()
+        if hasattr(self.context, "get_scratchpad"):
+            sp = self.context.get_scratchpad()
+        else:
+            sp = self._build_scratchpad_from_memory(task_spec)
+
+        effective_last_error = last_error if last_error is not None else self.last_error
+        if effective_last_error is None and verification_error is not None:
+            effective_last_error = verification_error
+
+        merged_files_modified = list(files_modified or [])
+        if verification_report and verification_report.files_modified:
+            for f in verification_report.files_modified:
+                if f not in merged_files_modified:
+                    merged_files_modified.append(f)
 
         telemetry = TelemetryReport(
             total_model_calls=step_count,
@@ -519,7 +624,7 @@ class Orchestrator:
             total_tool_calls=sum((tool_call_counts or {}).values()),
             tool_call_counts=dict(tool_call_counts or {}),
             files_inspected=list(files_inspected or []),
-            files_modified=list(files_modified or []),
+            files_modified=merged_files_modified,
             recovery_attempts=len(getattr(sp, "history_attempts", [])),
             total_wall_time_sec=wall_time,
         )
@@ -528,9 +633,20 @@ class Orchestrator:
             "status": status,
             "n_calls": step_count,
             "cost": self.cost,
-            "last_error": last_error,
+            "last_error": effective_last_error,
+            "verification_error": verification_error,
             "message": completion_message or ("Task completed." if status == "completed" else ""),
-            "verified": (status in ("completed", "resolved")) if self.memory_manager.get_state().status == TaskStatus.DONE else False,
+            "verified": verified,
+            "verification_report": verification_report,
+            "test_command": verification_report.test_command if verification_report else (task_spec.test_command or ""),
+            "test_output": verification_report.test_output if verification_report else "",
+            "git_diff": verification_report.git_diff if verification_report else "",
+            "verification_status": verification_report.status.value if verification_report else None,
+            "failure_classification": (
+                verification_report.failure_classification.value
+                if verification_report and verification_report.failure_classification
+                else None
+            ),
             "scratchpad": sp,
             "telemetry": telemetry,
         }

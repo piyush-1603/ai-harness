@@ -90,6 +90,8 @@ class Observation:
     source: str
     summary: str
     raw_output: Optional[str] = None
+    output_ref: Optional[str] = None
+    raw_output_chars: int = 0
     files: list[str] = field(default_factory=list)
     timestamp: str = field(default_factory=now_iso)
 
@@ -105,6 +107,8 @@ class Observation:
             "source": self.source,
             "summary": self.summary,
             "raw_output": self.raw_output,
+            "output_ref": self.output_ref,
+            "raw_output_chars": self.raw_output_chars,
             "files": list(self.files),
             "timestamp": self.timestamp,
         }
@@ -116,6 +120,8 @@ class Observation:
             source=data["source"],
             summary=data["summary"],
             raw_output=data.get("raw_output"),
+            output_ref=data.get("output_ref"),
+            raw_output_chars=data.get("raw_output_chars", 0),
             files=list(data.get("files", [])),
             timestamp=data.get("timestamp", now_iso()),
         )
