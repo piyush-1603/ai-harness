@@ -22,7 +22,7 @@ from src.memory.adapters import (
     failure_from_verification_report,
     attempt_from_tool_result,
 )
-from src.memory.artifacts import ArtifactStore
+from src.memory.artifacts import ArtifactStore, ArtifactIntegrityError
 from src.memory.inspection import (
     ObservationInspection,
     FailureInspection,
@@ -52,4 +52,5 @@ __all__ = [
     "ObservationInspection",
     "FailureInspection",
     "ArtifactInspection",
+    "ArtifactIntegrityError",
 ]

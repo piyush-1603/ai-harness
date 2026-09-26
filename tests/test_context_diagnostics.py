@@ -222,14 +222,6 @@ def test_observation_window_artifact_mapping(tmp_path):
     engine = ContextDiagnosticsEngine()
     report = engine.explain(manager, max_context_tokens=1000)
 
-    # Let's see what max_observations ended up as
-    final_max_obs = report.policy.max_observations
-    if "reduce_max_observations" in "".join(report.budget.reductions):
-         # If reductions happened, the final window is smaller than 10, e.g. 3 or 6.
-         # But the budget final config is what matters.
-         # Wait, the budget diagnostic doesn't expose final_config explicitly, but builder uses it.
-         pass
-
     # The first observation in the candidate list must map to the exact observation in the final slice
     obs_candidates = [c for c in report.candidates if c.category == "observation"]
     obs_candidates.sort(key=lambda c: int(c.id.split("_")[1])) # sort by ID "obs_0", "obs_1"...
@@ -241,11 +233,12 @@ def test_observation_window_artifact_mapping(tmp_path):
 
     # Let's find candidate obs_0
     obs_0_cand = next((c for c in obs_candidates if c.id == "obs_0"), None)
-    if obs_0_cand:
-        # Check its output_ref
-        # Since obs_0 is the first in the slice, it should map to state.recent_observations[-len(obs_candidates)]
-        expected_obs = state.recent_observations[-len(obs_candidates)]
-        assert obs_0_cand.output_ref == expected_obs.output_ref
+    assert obs_0_cand is not None
+
+    # Check its output_ref
+    # Since obs_0 is the first in the slice, it should map to state.recent_observations[-len(obs_candidates)]
+    expected_obs = state.recent_observations[-len(obs_candidates)]
+    assert obs_0_cand.output_ref == expected_obs.output_ref
 
 def test_diagnostics_do_not_read_artifacts(tmp_path, monkeypatch):
     manager = setup_base_manager(tmp_path)
