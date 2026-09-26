@@ -16,6 +16,12 @@ from src.memory.models import (
     now_iso,
 )
 from src.memory.storage import TaskStorage
+from src.memory.adapters import (
+    observation_from_tool_result,
+    verification_from_report,
+    failure_from_verification_report,
+    attempt_from_tool_result,
+)
 
 __all__ = [
     "MemoryManager",
@@ -32,4 +38,8 @@ __all__ = [
     "TokenUsage",
     "VerificationResult",
     "now_iso",
+    "observation_from_tool_result",
+    "verification_from_report",
+    "failure_from_verification_report",
+    "attempt_from_tool_result",
 ]
