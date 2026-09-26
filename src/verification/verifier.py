@@ -11,6 +11,7 @@ from __future__ import annotations
 import ast
 import os
 from pathlib import Path
+import shlex
 from typing import List, Optional
 
 from src.common.types import (
@@ -19,6 +20,7 @@ from src.common.types import (
     VerificationStatus,
 )
 from src.tools.file_ops import resolve_workspace_path, truncate_output
+from src.tools.search import NOISE_DIRS
 from src.tools.shell_ops import run_bash
 
 
@@ -62,6 +64,21 @@ class VerificationEngine:
         # ---------------------------------------------------------------------
         # Use -uall so all untracked files inside new directories are listed individually
         status_res = run_bash("git status --porcelain -uall", timeout=30, workspace_dir=ws_str)
+        if not status_res.success:
+            err_msg = status_res.error or status_res.output.strip() or "Git status command failed"
+            return VerificationReport(
+                status=VerificationStatus.FAILED,
+                is_verified=False,
+                tests_passed=False,
+                test_command=test_command or "",
+                test_output="",
+                files_modified=[],
+                git_diff="",
+                failure_classification=FailureClassification.UNKNOWN_ERROR,
+                syntax_valid=False,
+                summary=f"Verification failed: Git status command failed ({err_msg}).",
+            )
+
         diff_res = run_bash("git diff HEAD", timeout=30, workspace_dir=ws_str)
 
         # Fallback if repository HEAD does not exist yet
@@ -99,6 +116,9 @@ class VerificationEngine:
                 if fname and fname not in modified_files:
                     modified_files.append(fname)
 
+        # Ensure deterministic and deduplicated files_modified
+        modified_files = sorted(list(dict.fromkeys(modified_files)))
+
         # Check for NO_CHANGES
         if not raw_status and not raw_diff:
             return VerificationReport(
@@ -126,7 +146,7 @@ class VerificationEngine:
                         untracked_fname = untracked_fname[1:-1]
                     untracked_path = ws_path / untracked_fname
                     if untracked_path.is_file():
-                        res = run_bash(f"git diff --no-index /dev/null '{untracked_fname}'", workspace_dir=ws_str)
+                        res = run_bash(f"git diff --no-index /dev/null {shlex.quote(untracked_fname)}", workspace_dir=ws_str)
                         if res.output.strip():
                             untracked_diff_chunks.append(res.output.strip())
 
@@ -151,12 +171,16 @@ class VerificationEngine:
                 if abs_file not in py_files_to_check:
                     py_files_to_check.append(abs_file)
             elif abs_file.is_dir():
-                for root, _, files in os.walk(abs_file):
-                    for f in files:
+                for root, dirs, files in os.walk(abs_file):
+                    dirs[:] = [d for d in dirs if d not in NOISE_DIRS]
+                    dirs.sort()
+                    for f in sorted(files):
                         if f.endswith(".py"):
                             p = Path(root) / f
                             if p not in py_files_to_check:
                                 py_files_to_check.append(p)
+
+        py_files_to_check = sorted(list(dict.fromkeys(py_files_to_check)), key=lambda p: str(p))
 
         for abs_file in py_files_to_check:
             try:
@@ -236,10 +260,10 @@ class VerificationEngine:
         failure_class = FailureClassification.TEST_EXECUTION_ERROR
         if test_result.exit_code == 124:
             failure_class = FailureClassification.TIMEOUT
-        elif "AssertionError" in test_output or "assert " in test_output or "FAILED" in test_output:
-            failure_class = FailureClassification.ASSERTION_FAILED
         elif "ModuleNotFoundError" in test_output or "ImportError" in test_output:
             failure_class = FailureClassification.IMPORT_MISSING
+        elif "AssertionError" in test_output or "assert " in test_output or "FAILED" in test_output:
+            failure_class = FailureClassification.ASSERTION_FAILED
 
         return VerificationReport(
             status=VerificationStatus.FAILED,

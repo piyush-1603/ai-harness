@@ -160,6 +160,105 @@ class TestVerificationEngine(unittest.TestCase):
         self.assertIn("# added comment", report.git_diff)
         self.assertIn("+    return a + b", report.git_diff)
 
+    def test_non_git_workspace_verification_failure(self):
+        with tempfile.TemporaryDirectory() as non_git_dir:
+            file_path = Path(non_git_dir) / "some_file.py"
+            file_path.write_text("x = 1\n", encoding="utf-8")
+
+            report = self.verifier.verify(
+                workspace_dir=non_git_dir,
+                test_command=None,
+            )
+
+            self.assertEqual(report.status, VerificationStatus.FAILED)
+            self.assertFalse(report.is_verified)
+            self.assertFalse(report.tests_passed)
+            self.assertEqual(report.failure_classification, FailureClassification.UNKNOWN_ERROR)
+            self.assertEqual(report.files_modified, [])
+            self.assertIn("Git status", report.summary)
+
+    def test_untracked_file_with_single_quote(self):
+        quoted_file = self.ws / "untracked_test's.py"
+        quoted_file.write_text("def helper():\n    return 'quoted'\n", encoding="utf-8")
+
+        report = self.verifier.verify(
+            workspace_dir=str(self.ws),
+            test_command=None,
+        )
+
+        self.assertEqual(report.status, VerificationStatus.PASSED)
+        self.assertTrue(report.is_verified)
+        self.assertTrue(report.syntax_valid)
+        self.assertIn("untracked_test's.py", report.files_modified)
+        self.assertIn("def helper():", report.git_diff)
+
+    def test_module_not_found_classification_precedence(self):
+        fail_test = self.ws / "test_import_fail.py"
+        fail_test.write_text(
+            "import sys\n"
+            "sys.stderr.write('FAILED tests/test_foo.py - ModuleNotFoundError: No module named foo\\n')\n"
+            "sys.exit(1)\n",
+            encoding="utf-8",
+        )
+
+        self.code_file.write_text("def calculate(a, b):\n    return a + b + 1\n", encoding="utf-8")
+
+        report = self.verifier.verify(
+            workspace_dir=str(self.ws),
+            test_command="python3 test_import_fail.py",
+        )
+
+        self.assertEqual(report.status, VerificationStatus.FAILED)
+        self.assertFalse(report.is_verified)
+        self.assertFalse(report.tests_passed)
+        self.assertEqual(report.failure_classification, FailureClassification.IMPORT_MISSING)
+
+    def test_deterministic_syntax_traversal_and_noise_pruning(self):
+        subrepo = self.ws / "subrepo"
+        subrepo.mkdir()
+        subprocess.run(["git", "init"], cwd=str(subrepo), check=True, capture_output=True)
+
+        pycache_dir = subrepo / "__pycache__"
+        pycache_dir.mkdir(parents=True)
+        (pycache_dir / "bad.py").write_text("def broken(", encoding="utf-8")
+
+        venv_dir = subrepo / ".venv"
+        venv_dir.mkdir(parents=True)
+        (venv_dir / "bad_venv.py").write_text("def broken_venv(", encoding="utf-8")
+
+        (subrepo / "z_mod.py").write_text("x = 1\n", encoding="utf-8")
+        (subrepo / "a_mod.py").write_text("y = 2\n", encoding="utf-8")
+
+        report = self.verifier.verify(workspace_dir=str(self.ws))
+
+        self.assertEqual(report.status, VerificationStatus.PASSED)
+        self.assertTrue(report.is_verified)
+        self.assertTrue(report.syntax_valid)
+
+        # Introduce two broken files to verify deterministic traversal ordering
+        (subrepo / "z_broken.py").write_text("class ZBroken(", encoding="utf-8")
+        (subrepo / "a_broken.py").write_text("class ABroken(", encoding="utf-8")
+
+        report2 = self.verifier.verify(workspace_dir=str(self.ws))
+        self.assertEqual(report2.status, VerificationStatus.FAILED)
+        self.assertFalse(report2.syntax_valid)
+        self.assertEqual(report2.failure_classification, FailureClassification.SYNTAX_ERROR)
+        self.assertIn("a_broken.py", report2.summary)
+
+    def test_deterministic_and_deduplicated_files_modified(self):
+        (self.ws / "z_file.py").write_text("z = 1\n", encoding="utf-8")
+        (self.ws / "a_file.py").write_text("a = 1\n", encoding="utf-8")
+        (self.ws / "m_file.py").write_text("m = 1\n", encoding="utf-8")
+        self.code_file.write_text("def calculate(a, b):\n    return a + b\n", encoding="utf-8")
+
+        report = self.verifier.verify(workspace_dir=str(self.ws))
+
+        self.assertEqual(report.status, VerificationStatus.PASSED)
+        self.assertEqual(len(report.files_modified), len(set(report.files_modified)))
+        self.assertEqual(report.files_modified, sorted(report.files_modified))
+        for f in ["a_file.py", "calculator.py", "m_file.py", "z_file.py"]:
+            self.assertIn(f, report.files_modified)
+
 
 if __name__ == "__main__":
     unittest.main()
