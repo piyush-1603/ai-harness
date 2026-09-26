@@ -1,0 +1,173 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}</style><style>:root{color-scheme:light dark;--md-bg:#fff;--md-text:rgba(0,0,0,.8);--md-muted:rgba(0,0,0,.6);--md-fill:rgba(0,0,0,.04);--md-fill-strong:rgba(0,0,0,.06);--md-rule:rgba(0,0,0,.1);--md-rule-strong:rgba(0,0,0,.16);--md-link:hsl(210 100% 45%)}@media (prefers-color-scheme:dark){:root:where(:not([data-theme="light"])){--md-bg:#0d0d0d;--md-text:rgba(255,255,255,.85);--md-muted:rgba(255,255,255,.6);--md-fill:rgba(255,255,255,.06);--md-fill-strong:rgba(255,255,255,.09);--md-rule:rgba(255,255,255,.14);--md-rule-strong:rgba(255,255,255,.22);--md-link:hsl(210 100% 72%)}}:root[data-theme="dark"]{color-scheme:dark;--md-bg:#0d0d0d;--md-text:rgba(255,255,255,.85);--md-muted:rgba(255,255,255,.6);--md-fill:rgba(255,255,255,.06);--md-fill-strong:rgba(255,255,255,.09);--md-rule:rgba(255,255,255,.14);--md-rule-strong:rgba(255,255,255,.22);--md-link:hsl(210 100% 72%)}:root[data-theme="light"]{color-scheme:light}@media print{:root,:root[data-theme="dark"]{color-scheme:light;--md-bg:#fff;--md-text:rgba(0,0,0,.8);--md-muted:rgba(0,0,0,.6);--md-fill:rgba(0,0,0,.04);--md-fill-strong:rgba(0,0,0,.06);--md-rule:rgba(0,0,0,.1);--md-rule-strong:rgba(0,0,0,.16);--md-link:hsl(210 100% 45%)}}body{background:var(--md-bg);color:var(--md-text);max-width:720px;margin:0 auto;padding:32px;display:flex;flex-direction:column;gap:10px;font:14px/1.55 -apple-system,BlinkMacSystemFont,'SF Pro','Segoe UI',sans-serif;overflow-wrap:break-word}body>:first-child{margin-top:0}h1,h2,h3,h4,h5,h6{margin:6px 0 0;line-height:1.25;font-weight:600;text-wrap:balance}h1{font-size:1.35em}h2{font-size:1.15em;color:var(--md-muted)}h3,h4,h5,h6{font-size:1em}p,ul,ol,blockquote,table,pre,hr{margin:0}strong{font-weight:600}a{color:var(--md-link);text-decoration:none}a:hover{text-decoration:underline}ul,ol{display:flex;flex-direction:column;gap:6px;padding-left:22px}ul{list-style:disc}ol{list-style:decimal}:is(li,td,th)>*+:is(p,ul,ol,blockquote){margin-top:6px}blockquote{display:flex;flex-direction:column;gap:10px;border-left:2px solid var(--md-rule);padding-left:10px;color:var(--md-muted)}:not(pre)>code{background:var(--md-fill);padding:1px 3px;border-radius:4px;font:.92em 'SF Mono',ui-monospace,Menlo,Consolas,monospace}a>code{background:none;color:inherit}pre{background:var(--md-fill);padding:10px 12px;border-radius:6px;overflow-x:auto;font:12px/1.5 'SF Mono',ui-monospace,Menlo,Consolas,monospace;margin-block:4px}pre code{background:none;padding:0;font:inherit}table{width:100%;border-collapse:separate;border-spacing:2px;font:inherit}th,td{padding:6px 8px;border-radius:3px;text-align:left;vertical-align:top}th{background:var(--md-fill-strong);font-weight:600}td{background:var(--md-fill)}:is(th,td) :not(pre)>code{background:transparent}hr{border:0;border-top:1px solid var(--md-rule-strong);margin-block:10px}img{max-width:100%;height:auto;border-radius:4px}</style>
+</head><body>
+<h1>PRD: Autonomous Coding-Agent Harness</h1>
+<p><strong>Event:</strong> LCC × DevClub — AI Coding Harness Hackathon
+<strong>Duration:</strong> 24 hours
+<strong>Team size:</strong> 3</p>
+<hr>
+<h2>1. Problem Statement</h2>
+<p>Build a harness around a standardized foundation model that can:</p>
+<ul>
+<li>Understand a software-engineering issue</li>
+<li>Navigate an existing repository</li>
+<li>Use tools intelligently</li>
+<li>Manage context effectively</li>
+<li>Orchestrate model interactions</li>
+<li>Recover from failures without human help</li>
+<li>Produce correct, verified code changes</li>
+<li>Use tokens and compute efficiently</li>
+</ul>
+<p>Every team gets the <strong>same model, repo, issues, tests, and evaluation conditions</strong>. The differentiator is the harness — the engineering wrapped around the model, not the model itself.</p>
+<h2>2. Goals</h2>
+<table>
+<thead>
+<tr>
+<th>Goal</th>
+<th>Why it matters</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Solve issues end-to-end without human intervention</td>
+<td>Core definition of &quot;autonomous&quot; per the problem statement</td>
+</tr>
+<tr>
+<td>Verify every fix against real tests before declaring done</td>
+<td>Judging criterion: &quot;Correctness first,&quot; &quot;Evidence over claims&quot;</td>
+</tr>
+<tr>
+<td>Recover visibly from at least one failure during the demo</td>
+<td>Proves the harness — not luck — produced the result</td>
+</tr>
+<tr>
+<td>Report token/cost usage per issue</td>
+<td>Judging criterion: &quot;Efficiency matters&quot;</td>
+</tr>
+<tr>
+<td>Keep the system small enough that all 3 team members understand the whole thing</td>
+<td>Needed for debugging under time pressure and for explaining design decisions to judges</td>
+</tr>
+</tbody>
+</table>
+<h2>3. Non-Goals (explicitly out of scope for 24h)</h2>
+<ul>
+<li>Multi-agent / multi-model orchestration</li>
+<li>Custom fine-tuning of the foundation model</li>
+<li>Full sandboxing/container isolation beyond what's needed to run tests safely</li>
+<li>Support for multiple languages or multiple repos</li>
+<li>A polished UI (CLI or minimal log view is sufficient)</li>
+<li>Beating state-of-the-art SWE-bench scores — winning on rigor and demoability, not raw benchmark chasing</li>
+</ul>
+<h2>4. Approach</h2>
+<p><strong>Base:</strong> Fork <code>mini-swe-agent</code> (SWE-agent/mini-swe-agent) rather than building the agent loop from scratch.</p>
+<p><strong>Rationale:</strong> ~100 lines of core Python, no forced tool-calling API, &gt;70% SWE-bench Verified out of the box. Small enough for all three of us to read, own, and meaningfully modify in a day — unlike heavier frameworks (OpenHands) which would mostly be configured, not engineered.</p>
+<p><strong>What &quot;our engineering&quot; means on top of the fork:</strong> the stock repo has a deliberately dumb loop (bash-only, no compaction, no verification gating, no structured recovery). Our value-add is exactly the four subsystems below, layered onto that base. Git history from the fork point is our evidence of engineering effort for judges.</p>
+<h2>5. System Architecture</h2>
+<pre><code>Issue → Orchestrator → Foundation Model ⇄ Tools/Repo
+              ↓
+        Context &amp; Memory
+</code></pre>
+<p><strong>Core loop (state machine):</strong>
+<code>EXPLORING → EDITING → TESTING → (DONE | RETRY | ESCALATE)</code></p>
+<h2>6. Functional Requirements by Subsystem</h2>
+<h3>6.1 Orchestration &amp; Recovery — Owner: Person A</h3>
+<ul>
+<li>Drive the state machine; decide when a task is complete, when to retry, when to escalate</li>
+<li>Detect repeated identical failures (same error twice) → force a strategy change on next attempt</li>
+<li>Enforce a hard step cap per issue (e.g. 8 attempts); on cap, emit a structured &quot;blocked&quot; report (what was tried, last error, best guess at cause) instead of looping indefinitely</li>
+<li>Own <code>main.py</code> — the integration point that calls into Context and Tools as defined interfaces</li>
+</ul>
+<h3>6.2 Context &amp; Memory — Owner: Person B</h3>
+<ul>
+<li>Maintain a persistent scratchpad (hypothesis, files touched, attempt history) that is summarized — not raw-dumped — back into the prompt each turn</li>
+<li>Compact/drop stale tool outputs once superseded (e.g. old test failures once a newer result exists)</li>
+<li>Track and log token usage and cost per issue and per run</li>
+<li>(Stretch) lightweight repo symbol index built once at start, reused across issues</li>
+</ul>
+<h3>6.3 Tools, Repository Exploration &amp; Verification — Owner: Person C</h3>
+<ul>
+<li>Implement: <code>read_file(path, line_range)</code>, <code>search_code(pattern)</code>, <code>edit_file(diff)</code>, <code>run_tests(target)</code></li>
+<li>Repo navigation strategy: start from issue text (error strings/symbol names), grep outward rather than loading full repo</li>
+<li>Verification: run the real test suite after every edit; report both (a) does the target failing test now pass, and (b) did any previously-passing test regress</li>
+<li>No self-graded &quot;looks correct&quot; — test suite output is the only accepted evidence of success</li>
+</ul>
+<h2>7. Interface Contract (agreed at Hour 0, before parallel work begins)</h2>
+<p>Shared data shapes all three subsystems code against, so each person can stub the other two and build independently:</p>
+<ul>
+<li><strong>ToolResult</strong>: <code>{ success: bool, output: str, error: str | None }</code></li>
+<li><strong>ScratchpadState</strong>: <code>{ hypothesis: str, files_touched: list[str], attempt_history: list[str] }</code></li>
+<li><strong>VerificationResult</strong>: <code>{ passed: bool, failing_tests: list[str], stdout: str, stderr: str }</code></li>
+</ul>
+<h2>8. Team &amp; Timeline</h2>
+<table>
+<thead>
+<tr>
+<th>Window</th>
+<th>Activity</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Hr 0–1</td>
+<td>Agree on interface contract (Section 7), together</td>
+</tr>
+<tr>
+<td>Hr 1–14</td>
+<td>Parallel build on owned subsystems, using stubs for the other two</td>
+</tr>
+<tr>
+<td>Hr 14–18</td>
+<td>Integration — swap stubs for real implementations</td>
+</tr>
+<tr>
+<td>Hr 18–21</td>
+<td>Debug on real provided repo/issues; tune prompts</td>
+</tr>
+<tr>
+<td>Hr 21–24</td>
+<td>Buffer + demo prep: stage the run that shows explore → edit → fail → adapt → pass; prepare token-usage numbers</td>
+</tr>
+</tbody>
+</table>
+<h2>9. Success Metrics (for our own tracking, ahead of judging)</h2>
+<ul>
+<li>% of provided issues resolved with passing tests, no regressions</li>
+<li>At least one demoed run showing failure → recovery → success</li>
+<li>Tokens and wall-clock time per issue, reported per run</li>
+<li>Zero infinite loops / hangs during live demo</li>
+</ul>
+<h2>10. Risks</h2>
+<table>
+<thead>
+<tr>
+<th>Risk</th>
+<th>Mitigation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Integration breaks late because interfaces drifted</td>
+<td>Small, frequent merges to shared repo (not one big merge at Hr 14); ping team immediately on any contract change</td>
+</tr>
+<tr>
+<td>Demo issue happens to succeed on first try (no recovery to show)</td>
+<td>Pre-stage a known-tricky issue where the model's first attempt plausibly fails, to guarantee the recovery beat</td>
+</tr>
+<tr>
+<td>Time lost on mini-swe-agent internals</td>
+<td>Timebox exploration of the base repo to first 1–2 hours; if not understood by then, simplify further</td>
+</tr>
+<tr>
+<td>Test suite is slow, throttling iteration</td>
+<td>Scope verification to the relevant test file/target, not full suite, where possible</td>
+</tr>
+</tbody>
+</table>
+<h2>11. Open Questions for Organizers</h2>
+<ul>
+<li>Does &quot;your own harness&quot; permit forking an existing open-source agent repo, or must the harness be built from scratch?</li>
+<li>What weight does the rubric place on efficiency vs. correctness vs. recovery demonstration?</li>
+<li>Is there a fixed issue set for evaluation, or will judges run held-out issues live?</li>
+</ul>
+
+</body></html>
