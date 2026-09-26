@@ -1,6 +1,7 @@
 from src.context.scanner import RepositoryScanner
 import os
 import argparse
+import os
 import sys
 from src.orchestrator.orchestrator import Orchestrator
 from src.orchestrator.test_orchestrator import StubToolEngine, StubVerifier, StubModel
@@ -79,22 +80,25 @@ def main():
     orchestrator = Orchestrator(context=context, tool_engine=tool_engine, verifier=verifier, model=model, config=config)
     
     print(f"Starting orchestration for issue: {args.issue}")
-    report = orchestrator.run(args.issue)
-    
+    report = orchestrator.run(task_spec)
+
     print("\n--- Final Report ---")
     print(f"Status: {report['status']}")
     print(f"Attempts: {report.get('n_calls', 0)}")
     print(f"Cost: ${report.get('cost', 0.0):.2f}")
-    if report['last_error']:
+    if report.get("last_error"):
         print(f"Last Error: {report['last_error']}")
-    
-    scratchpad = report['scratchpad']
-    print(f"Final Hypothesis: {scratchpad.hypothesis}")
-    
-    if report['status'] == "resolved":
+
+    scratchpad = report.get("scratchpad")
+    if scratchpad:
+        hypothesis = getattr(scratchpad, "hypothesis", None) or getattr(scratchpad, "active_hypothesis", "")
+        print(f"Final Hypothesis: {hypothesis}")
+
+    if report.get("status") in ("resolved", "completed"):
         sys.exit(0)
     else:
         sys.exit(1)
+
 
 if __name__ == "__main__":
     main()
