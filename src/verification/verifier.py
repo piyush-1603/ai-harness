@@ -18,6 +18,7 @@ from src.common.types import (
     FailureClassification,
     VerificationReport,
     VerificationStatus,
+    VerificationResult,
 )
 from src.tools.file_ops import resolve_workspace_path, truncate_output
 from src.tools.search import NOISE_DIRS
@@ -277,3 +278,12 @@ class VerificationEngine:
             syntax_valid=True,
             summary=f"Verification failed: Test command '{effective_cmd}' failed with exit code {test_result.exit_code}.",
         )
+
+def adapt_verification_report(report: VerificationReport) -> VerificationResult:
+    """Adapts the rich VerificationReport into the canonical VerificationResult."""
+    return VerificationResult(
+        passed=report.is_verified,
+        failing_tests=[],
+        stdout=report.test_output,
+        stderr="" if report.is_verified else report.test_output,
+    )

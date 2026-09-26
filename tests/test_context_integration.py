@@ -13,7 +13,7 @@ from src.memory.models import (
     Observation,
     Phase,
     TaskStatus,
-    VerificationResult,
+    VerificationSnapshot,
 )
 
 
@@ -135,7 +135,7 @@ def test_b2_realistic_memory_to_context_bundle_integration(tmp_path: Path) -> No
     # 8. Current Errors & Verification
     manager.set_current_errors([repeated_sig])
     manager.set_verification(
-        VerificationResult(
+        VerificationSnapshot(
             success=True,
             summary="All 15 checkout integration tests passed",
             tests_passed=["test_webhook_retry", "test_idempotency_concurrent"],

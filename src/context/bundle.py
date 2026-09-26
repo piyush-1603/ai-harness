@@ -14,7 +14,7 @@ from src.memory.models import (
     Phase,
     TaskStatus,
     TokenUsage,
-    VerificationResult,
+    VerificationSnapshot,
 )
 
 
@@ -37,7 +37,7 @@ class ContextBundle:
     failed_attempts: list[Attempt] = field(default_factory=list)
     repeated_failures: list[Failure] = field(default_factory=list)
     current_errors: list[str] = field(default_factory=list)
-    latest_verification_result: Optional[VerificationResult] = None
+    latest_verification_result: Optional[VerificationSnapshot] = None
     iteration_count: int = 0
     model_call_count: int = 0
     tool_call_count: int = 0
@@ -71,7 +71,7 @@ class ContextBundle:
         return [a for a in self.recent_attempts if a.success]
 
     @property
-    def verification(self) -> Optional[VerificationResult]:
+    def verification(self) -> Optional[VerificationSnapshot]:
         return self.latest_verification_result
 
     @property
@@ -140,7 +140,7 @@ class ContextBundle:
             status = status_raw
 
         verif_data = data.get("latest_verification_result")
-        verif = VerificationResult.from_dict(verif_data) if verif_data else None
+        verif = VerificationSnapshot.from_dict(verif_data) if verif_data else None
 
         return cls(
             task=data["task"],

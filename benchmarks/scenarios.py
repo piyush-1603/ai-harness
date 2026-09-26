@@ -9,7 +9,7 @@ from src.memory.models import (
     Attempt,
     Discovery,
     Observation,
-    VerificationResult,
+    VerificationSnapshot,
 )
 from src.context.scanner import RepositoryIndex
 from src.context.symbols import FileSymbols, SymbolRecord
@@ -88,7 +88,7 @@ def create_scenarios() -> list[Scenario]:
         relevant_files=["src/token.py"],
         attempts=[Attempt(id="a1", hypothesis="H1", action="A", result="Fail", success=False, files_touched=["src/auth.py"])],
         current_errors=["ExpectedError: Invalid token"],
-        verification=VerificationResult(success=False, summary="Test failed", timestamp=_get_timestamp()),
+        verification=VerificationSnapshot(success=False, summary="Test failed", timestamp=_get_timestamp()),
     )
     scenarios.append(Scenario(
         name="Scenario 2: First failure",
@@ -111,7 +111,7 @@ def create_scenarios() -> list[Scenario]:
             Attempt(id="a2", hypothesis="H1", action="A2", result="Fail", success=False, files_touched=["src/auth.py"]),
         ],
         current_errors=["ExpectedError: Invalid token"],
-        verification=VerificationResult(success=False, summary="Test failed", timestamp=_get_timestamp()),
+        verification=VerificationSnapshot(success=False, summary="Test failed", timestamp=_get_timestamp()),
         failures=[Failure(error_signature="ExpectedError", summary="Fails on auth", action="A", occurrence_count=2, files=["src/auth.py"])],
     )
     scenarios.append(Scenario(
@@ -137,7 +137,7 @@ def create_scenarios() -> list[Scenario]:
             Attempt(id="a3", hypothesis="H3", action="A3", result="Success", success=True, files_touched=["src/auth.py"]),
         ],
         current_errors=[],
-        verification=VerificationResult(success=True, summary="Test passed", timestamp=_get_timestamp()),
+        verification=VerificationSnapshot(success=True, summary="Test passed", timestamp=_get_timestamp()),
         failures=[Failure(error_signature="ExpectedError", summary="Fails on auth", action="A", occurrence_count=2, files=["src/auth.py"], resolved=True, resolved_at=_get_timestamp())],
     )
     scenarios.append(Scenario(
@@ -161,7 +161,7 @@ def create_scenarios() -> list[Scenario]:
             Attempt(id="a2", hypothesis="H2", action="A2", result="Fail", success=False, files_touched=["src/auth.py"]),
         ],
         current_errors=["ExpectedError: Tight budget error"],
-        verification=VerificationResult(success=False, summary="Test failed", timestamp=_get_timestamp()),
+        verification=VerificationSnapshot(success=False, summary="Test failed", timestamp=_get_timestamp()),
         failures=[Failure(error_signature="ExpectedError", summary="Fails on auth", action="A", occurrence_count=2, files=["src/auth.py"])],
         discoveries=[Discovery(statement="Discovery", evidence="Evidence", files=["src/auth.py"], timestamp=_get_timestamp()) for _ in range(20)],
         recent_observations=[Observation(type="log", source="stdout", summary="Log", timestamp=_get_timestamp()) for _ in range(20)],

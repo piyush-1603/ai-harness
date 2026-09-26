@@ -17,7 +17,7 @@ from src.memory.models import (
     Phase,
     TaskState,
     TaskStatus,
-    VerificationResult,
+    VerificationSnapshot,
 )
 
 
@@ -187,7 +187,7 @@ def test_successful_verification_resolves_active_failures(tmp_path: Path) -> Non
 
     # Set successful verification
     manager.set_verification(
-        VerificationResult(success=True, summary="All 10 tests passed successfully")
+        VerificationSnapshot(success=True, summary="All 10 tests passed successfully")
     )
 
     state = manager.get_state()
@@ -204,7 +204,7 @@ def test_failed_verification_does_not_resolve_failures(tmp_path: Path) -> None:
     manager.add_failure(Failure(error_signature="AssertionError", summary="bad output", action="test"))
 
     manager.set_verification(
-        VerificationResult(success=False, summary="1 test failed with AssertionError")
+        VerificationSnapshot(success=False, summary="1 test failed with AssertionError")
     )
 
     state = manager.get_state()
@@ -279,7 +279,7 @@ def test_pressure_contraction_from_high_to_low(tmp_path: Path) -> None:
     manager.record_attempt(Attempt(id="att-f2", action="retry 2", success=False))
     manager.record_attempt(Attempt(id="att-f3", action="retry 3", success=False))  # 3 streak -> +3 points
     manager.set_current_errors(["TimeoutErr: DB connection timed out"])  # +1 point
-    manager.set_verification(VerificationResult(success=False, summary="Verification failed"))  # +2 points
+    manager.set_verification(VerificationSnapshot(success=False, summary="Verification failed"))  # +2 points
 
     # Total score = 2 + 3 + 1 + 2 = 8 -> HIGH
     score_high, level_high, _ = policy.calculate_pressure(manager)
@@ -288,7 +288,7 @@ def test_pressure_contraction_from_high_to_low(tmp_path: Path) -> None:
 
     # 2. Recovery succeeds: successful attempt, verification passes, current errors cleared
     manager.record_attempt(Attempt(id="att-s1", action="increase pool size and timeout", success=True))
-    manager.set_verification(VerificationResult(success=True, summary="All stress tests passed"))
+    manager.set_verification(VerificationSnapshot(success=True, summary="All stress tests passed"))
     manager.set_current_errors([])
 
     # Total score = 0 (streak reset, verification passed, failures resolved, errors empty) -> LOW!
@@ -334,7 +334,7 @@ def test_lifecycle_regression_plan_execute_recover_high_then_recover_low(tmp_pat
     manager.add_failure(Failure(error_signature="ValidationError", summary="schema mismatch", action="validate"))
     manager.record_attempt(Attempt(id="att-2", action="run verify", success=False))
     manager.set_current_errors(["ValidationError: schema mismatch"])
-    manager.set_verification(VerificationResult(success=False, summary="1 schema validation test failed"))
+    manager.set_verification(VerificationSnapshot(success=False, summary="1 schema validation test failed"))
 
     # 4. RECOVER Phase (HIGH pressure)
     manager.set_phase(Phase.RECOVER)
@@ -356,7 +356,7 @@ def test_lifecycle_regression_plan_execute_recover_high_then_recover_low(tmp_pat
 
     # 5. Fix succeeds: successful attempt, verification passes, errors cleared
     manager.record_attempt(Attempt(id="att-5", action="fix schema definition", success=True))
-    manager.set_verification(VerificationResult(success=True, summary="All validation tests pass"))
+    manager.set_verification(VerificationSnapshot(success=True, summary="All validation tests pass"))
     manager.set_current_errors([])
 
     # 6. Return to EXECUTE: pressure must contract to LOW!
