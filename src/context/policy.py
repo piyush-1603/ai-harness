@@ -59,6 +59,7 @@ class AdaptivePolicyConfig:
     repeated_failure_weight: int = 1
     strongly_repeated_threshold: int = 4
     strongly_repeated_bonus: int = 1
+    max_expanded_files: int = 20
 
     # Monotonic limits: (Phase, PressureLevel) -> limits
     limits: dict[str, dict[str, dict[str, int]]] = field(default_factory=lambda: {
@@ -94,6 +95,7 @@ class AdaptivePolicyConfig:
             "repeated_failure_weight": self.repeated_failure_weight,
             "strongly_repeated_threshold": self.strongly_repeated_threshold,
             "strongly_repeated_bonus": self.strongly_repeated_bonus,
+            "max_expanded_files": self.max_expanded_files,
             "limits": self.limits,
         }
 
@@ -108,6 +110,7 @@ class AdaptivePolicyConfig:
             repeated_failure_weight=int(data.get("repeated_failure_weight", 1)),
             strongly_repeated_threshold=int(data.get("strongly_repeated_threshold", 4)),
             strongly_repeated_bonus=int(data.get("strongly_repeated_bonus", 1)),
+            max_expanded_files=int(data.get("max_expanded_files", 20)),
             limits=data.get("limits", cls().limits),
         )
 
@@ -133,6 +136,7 @@ class ContextProfile:
     include_repeated_failures: bool
     include_verification: bool
     include_telemetry: bool
+    max_expanded_files: int = 20
     reasons: list[str] = field(default_factory=list)
 
     def to_context_config(self) -> ContextConfig:
@@ -153,6 +157,8 @@ class ContextProfile:
             include_symbols=self.include_symbols,
             include_local_imports=self.include_local_imports,
             repository_scope=self.repository_scope,
+            pressure_level=self.pressure_level.value if hasattr(self.pressure_level, "value") else str(self.pressure_level),
+            max_expanded_files=self.max_expanded_files,
             include_raw_output=False,
         )
 
@@ -173,6 +179,7 @@ class ContextProfile:
             "include_repeated_failures": self.include_repeated_failures,
             "include_verification": self.include_verification,
             "include_telemetry": self.include_telemetry,
+            "max_expanded_files": self.max_expanded_files,
             "reasons": list(self.reasons),
         }
 
@@ -197,6 +204,7 @@ class ContextProfile:
             include_repeated_failures=bool(data.get("include_repeated_failures", False)),
             include_verification=bool(data.get("include_verification", False)),
             include_telemetry=bool(data.get("include_telemetry", False)),
+            max_expanded_files=int(data.get("max_expanded_files", 20)),
             reasons=list(data.get("reasons", [])),
         )
 
@@ -399,6 +407,7 @@ class AdaptiveContextPolicy:
             include_repeated_failures=include_repeated_failures,
             include_verification=include_verification,
             include_telemetry=include_telemetry,
+            max_expanded_files=cfg.max_expanded_files,
             reasons=reasons,
         )
 

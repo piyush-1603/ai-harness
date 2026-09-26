@@ -176,10 +176,26 @@ class ContextBuilder:
                             local_import_neighbors.append(imp)
 
             if cfg.include_symbols:
+                from src.context.expansion import FailureAwareExpander
+                from src.context.policy import PressureLevel
+
+                try:
+                    pressure = PressureLevel(cfg.pressure_level)
+                except ValueError:
+                    pressure = PressureLevel.LOW
+
+                expander = FailureAwareExpander(max_expanded_files=getattr(cfg, "max_expanded_files", 20))
+                expansion_plan = expander.expand(state, repo, pressure)
+
                 eligible_symbol_files = []
                 for f in focus_files:
                     if f in repo.file_symbols and f not in eligible_symbol_files:
                         eligible_symbol_files.append(f)
+                
+                for f in expansion_plan.expanded_files:
+                    if f in repo.file_symbols and f not in eligible_symbol_files:
+                        eligible_symbol_files.append(f)
+
                 if scope in (RepositoryScope.FOCUSED, RepositoryScope.BROAD):
                     for f in local_import_neighbors:
                         if f in repo.file_symbols and f not in eligible_symbol_files:
