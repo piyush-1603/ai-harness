@@ -1,11 +1,17 @@
-from textual.app import ComposeResult
-from textual.widget import Widget
 from textual.widgets import Static
+from textual.reactive import reactive
 
-class LifecycleWidget(Widget):
+class LifecycleWidget(Static):
     """A minimal widget displaying the lifecycle phase."""
-    
-    def compose(self) -> ComposeResult:
-        # PLAN        EXECUTE        VERIFY        RECOVER
-        #                                            ●
-        yield Static("○ PLAN    ○ EXECUTE    ○ VERIFY    [b #4ea8de]● RECOVER[/]")
+
+    active_phase = reactive("PLAN")
+
+    def render(self) -> str:
+        phases = ["PLAN", "EXECUTE", "VERIFY", "RECOVER"]
+        result = []
+        for p in phases:
+            if p == self.active_phase:
+                result.append(f"[b #4ea8de]● {p}[/]")
+            else:
+                result.append(f"○ {p}")
+        return "    ".join(result)

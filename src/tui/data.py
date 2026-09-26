@@ -78,8 +78,8 @@ class TUIDataProvider:
         return OverviewData(
             task_id=state.task_id,
             task=state.task,
-            phase=state.phase,
-            status=state.status,
+            phase=state.phase.name if hasattr(state.phase, "name") else str(state.phase),
+            status=state.status.name if hasattr(state.status, "name") else str(state.status),
             iteration=state.iteration,
             model_calls=state.model_calls,
             tool_calls=state.tool_calls,
