@@ -33,7 +33,9 @@ from src.common.types import (
     ToolCall,
     ToolName,
     ToolResult,
+    VerificationReport,
     VerificationResult,
+    VerificationStatus,
 )
 from src.context.builder import ContextBuilder
 from src.context.bundle import ContextBundle
@@ -46,7 +48,13 @@ from src.memory.models import (
     TaskState,
     TaskStatus,
 )
-from src.memory.adapters import observation_from_tool_result, attempt_from_tool_result
+from src.memory.adapters import (
+    attempt_from_tool_result,
+    failure_from_verification_report,
+    observation_from_tool_result,
+    verification_from_report,
+)
+from src.verification.verifier import VerificationEngine
 from src.orchestrator.model_adapter import (
     ModelAdapter,
     ModelAPIError,
@@ -101,7 +109,7 @@ class Orchestrator:
         config: OrchestratorConfig holding step_limit, cost_limit, templates
         """
         self.context = context
-        self.verifier = verifier
+        self.verifier = verifier if verifier is not None else VerificationEngine()
         self.model = model
         self.config = config or OrchestratorConfig()
 
@@ -257,13 +265,79 @@ class Orchestrator:
                         summary=f"Model completion: {decision.message}",
                     )
                 )
-                # Slice 3: Terminate loop with completion state. Verification hard gate is subsequent step.
+
+                # Slice 4: Independent verification before declaring task completion
+                verification_report: Optional[VerificationReport] = None
+                verification_error: Optional[str] = None
+                try:
+                    if self.verifier is not None:
+                        verification_report = self.verifier.verify(
+                            workspace_dir=task_spec.workspace_dir,
+                            test_command=task_spec.test_command,
+                        )
+                except Exception as e:
+                    logger.error(f"VerificationEngine raised exception: {e}", exc_info=True)
+                    verification_error = f"Verification raised unexpected exception: {e}"
+                    verification_report = VerificationReport(
+                        status=VerificationStatus.FAILED,
+                        is_verified=False,
+                        tests_passed=False,
+                        test_command=task_spec.test_command or "",
+                        test_output="",
+                        files_modified=[],
+                        git_diff="",
+                        failure_classification=FailureClassification.UNKNOWN_ERROR,
+                        syntax_valid=False,
+                        summary=f"Verification raised unexpected exception: {e}",
+                    )
+
+                is_verified = bool(verification_report and verification_report.is_verified)
+
+                # Record verification into MemoryManager via typed adapters
+                if verification_report is not None:
+                    v_res = verification_from_report(verification_report)
+                    self.memory_manager.set_verification(v_res)
+                    fail = failure_from_verification_report(verification_report)
+                    if fail is not None:
+                        self.memory_manager.add_failure(fail)
+                        self.memory_manager.record_observation(
+                            Observation(
+                                type="verification_failure",
+                                source="verification_engine",
+                                summary=verification_report.summary,
+                                raw_output=verification_report.test_output,
+                                files=verification_report.files_modified,
+                            )
+                        )
+                        failing_items = (
+                            [verification_report.failure_classification.value]
+                            if verification_report.failure_classification
+                            else []
+                        )
+                        self.recovery_manager.analyze_failure(
+                            failing_items,
+                            verification_report.test_output or verification_report.summary,
+                        )
+                    else:
+                        self.memory_manager.record_observation(
+                            Observation(
+                                type="verification_success",
+                                source="verification_engine",
+                                summary=verification_report.summary,
+                                raw_output=verification_report.test_output,
+                                files=verification_report.files_modified,
+                            )
+                        )
+
                 return self._make_report(
                     status="completed",
                     step_count=step_count,
                     task_spec=task_spec,
                     completion_message=decision.message,
                     last_error=self.last_error,
+                    verified=is_verified,
+                    verification_report=verification_report,
+                    verification_error=verification_error,
                     start_time=start_time,
                     tool_call_counts=tool_call_counts,
                     files_inspected=files_inspected,
@@ -435,6 +509,9 @@ class Orchestrator:
         task_spec: TaskSpec,
         completion_message: Optional[str] = None,
         last_error: Optional[str] = None,
+        verified: bool = False,
+        verification_report: Optional[VerificationReport] = None,
+        verification_error: Optional[str] = None,
         start_time: float = 0.0,
         tool_call_counts: Optional[Dict[str, int]] = None,
         files_inspected: Optional[List[str]] = None,
@@ -449,6 +526,14 @@ class Orchestrator:
             sp = self._build_scratchpad_from_memory(task_spec)
 
         effective_last_error = last_error if last_error is not None else self.last_error
+        if effective_last_error is None and verification_error is not None:
+            effective_last_error = verification_error
+
+        merged_files_modified = list(files_modified or [])
+        if verification_report and verification_report.files_modified:
+            for f in verification_report.files_modified:
+                if f not in merged_files_modified:
+                    merged_files_modified.append(f)
 
         telemetry = TelemetryReport(
             total_model_calls=step_count,
@@ -458,7 +543,7 @@ class Orchestrator:
             total_tool_calls=sum((tool_call_counts or {}).values()),
             tool_call_counts=dict(tool_call_counts or {}),
             files_inspected=list(files_inspected or []),
-            files_modified=list(files_modified or []),
+            files_modified=merged_files_modified,
             recovery_attempts=len(getattr(sp, "history_attempts", [])),
             total_wall_time_sec=wall_time,
         )
@@ -468,8 +553,19 @@ class Orchestrator:
             "n_calls": step_count,
             "cost": self.cost,
             "last_error": effective_last_error,
+            "verification_error": verification_error,
             "message": completion_message or ("Task completed." if status == "completed" else ""),
-            "verified": False,
+            "verified": verified,
+            "verification_report": verification_report,
+            "test_command": verification_report.test_command if verification_report else (task_spec.test_command or ""),
+            "test_output": verification_report.test_output if verification_report else "",
+            "git_diff": verification_report.git_diff if verification_report else "",
+            "verification_status": verification_report.status.value if verification_report else None,
+            "failure_classification": (
+                verification_report.failure_classification.value
+                if verification_report and verification_report.failure_classification
+                else None
+            ),
             "scratchpad": sp,
             "telemetry": telemetry,
         }

@@ -13,14 +13,23 @@ Verifies the real model <-> tool loop across all required test scenarios:
 
 import json
 from pathlib import Path
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import MagicMock, patch
 
-from src.common.types import TaskSpec, ToolName
+from src.common.types import (
+    FailureClassification,
+    TaskSpec,
+    ToolName,
+    VerificationReport,
+    VerificationStatus,
+)
+from src.memory.manager import MemoryManager
 from src.orchestrator.model_adapter import ModelAdapter, ModelAPIError
 from src.orchestrator.orchestrator import Orchestrator, OrchestratorConfig
 from src.tools.registry import ToolEngine
+from src.verification.verifier import VerificationEngine
 
 
 class TestRealOrchestrationLoop(unittest.TestCase):
@@ -308,6 +317,416 @@ class TestRealOrchestrationLoop(unittest.TestCase):
             self.assertIn("sample.py", sp.identified_files)
             self.assertTrue(len(sp.attempt_history) > 0)
             self.assertIn("read_file", sp.attempt_history[0])
+
+
+class TestSlice4VerificationIntegration(unittest.TestCase):
+    """Hermetic regression tests covering Slice 4 Verification + Recovery Integration:
+    A. ModelCompletion triggers VerificationEngine.
+    B. Passing verification produces verified=True.
+    C. Failing verification produces verified=False.
+    D. ModelCompletion alone cannot produce verified=True.
+    E. VerificationEngine exception fails closed.
+    F. Verification report evidence reaches the final report.
+    G. Existing last_error from an earlier tool failure is preserved.
+    H. Existing HARNESS_MAX_STEPS behavior remains unchanged.
+    I. Existing malformed-model-response behavior remains unchanged.
+    J. Existing model/tool/memory integration remains intact.
+    """
+
+    def _init_repo(self, ws: Path):
+        subprocess.run(["git", "init"], cwd=str(ws), check=True, capture_output=True)
+        subprocess.run(["git", "config", "user.name", "TestUser"], cwd=str(ws), check=True, capture_output=True)
+        subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=str(ws), check=True, capture_output=True)
+
+    def test_9a_model_completion_triggers_verification_engine(self):
+        """A. ModelCompletion triggers VerificationEngine."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            ws = Path(tmp_dir)
+            self._init_repo(ws)
+            (ws / "calc.py").write_text("def add(a, b):\n    return a - b\n")
+            (ws / "test_calc.py").write_text(
+                "from calc import add\nassert add(2, 3) == 5\n"
+            )
+            subprocess.run(["git", "add", "."], cwd=str(ws), check=True)
+            subprocess.run(["git", "commit", "-m", "init"], cwd=str(ws), check=True)
+
+            mock_responses = [
+                json.dumps({
+                    "tool_name": "edit_file",
+                    "tool_args": {
+                        "path": "calc.py",
+                        "search_block": "return a - b\n",
+                        "replace_block": "return a + b\n",
+                    },
+                }),
+                json.dumps({"action": "complete", "message": "Fixed addition"}),
+            ]
+            adapter = ModelAdapter(mock_mode=True, mock_responses=mock_responses)
+            engine = ToolEngine(workspace_dir=tmp_dir)
+            verifier = VerificationEngine()
+            orch = Orchestrator(model_adapter=adapter, tool_engine=engine, verifier=verifier)
+
+            task = TaskSpec(
+                issue_id="test-9a",
+                issue_description="Fix addition in calc.py",
+                workspace_dir=tmp_dir,
+                test_command="python3 test_calc.py",
+            )
+            report = orch.run(task)
+
+            self.assertEqual(report["status"], "completed")
+            self.assertIsNotNone(report["verification_report"])
+            self.assertTrue(report["verified"])
+            self.assertEqual(report["verification_status"], VerificationStatus.PASSED.value)
+
+    def test_9b_passing_verification_produces_verified_true(self):
+        """B. Passing verification produces verified=True."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            ws = Path(tmp_dir)
+            self._init_repo(ws)
+            (ws / "app.py").write_text("def status():\n    return 'broken'\n")
+            (ws / "test_app.py").write_text(
+                "from app import status\nassert status() == 'ok'\n"
+            )
+            subprocess.run(["git", "add", "."], cwd=str(ws), check=True)
+            subprocess.run(["git", "commit", "-m", "init"], cwd=str(ws), check=True)
+
+            mock_responses = [
+                json.dumps({
+                    "tool_name": "edit_file",
+                    "tool_args": {
+                        "path": "app.py",
+                        "search_block": "return 'broken'\n",
+                        "replace_block": "return 'ok'\n",
+                    },
+                }),
+                json.dumps({"action": "complete", "message": "App fixed."}),
+            ]
+            adapter = ModelAdapter(mock_mode=True, mock_responses=mock_responses)
+            engine = ToolEngine(workspace_dir=tmp_dir)
+            verifier = VerificationEngine()
+            orch = Orchestrator(model_adapter=adapter, tool_engine=engine, verifier=verifier)
+
+            task = TaskSpec(
+                issue_id="test-9b",
+                issue_description="Fix app status",
+                workspace_dir=tmp_dir,
+                test_command="python3 test_app.py",
+            )
+            report = orch.run(task)
+
+            self.assertEqual(report["status"], "completed")
+            self.assertTrue(report["verified"])
+            self.assertEqual(report["verification_status"], VerificationStatus.PASSED.value)
+            self.assertTrue(report["verification_report"].tests_passed)
+            self.assertTrue(report["verification_report"].is_verified)
+
+    def test_9c_failing_verification_produces_verified_false(self):
+        """C. Failing verification produces verified=False."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            ws = Path(tmp_dir)
+            self._init_repo(ws)
+            (ws / "calc.py").write_text("def add(a, b):\n    return a - b\n")
+            (ws / "test_calc.py").write_text(
+                "from calc import add\nassert add(2, 3) == 5\n"
+            )
+            subprocess.run(["git", "add", "."], cwd=str(ws), check=True)
+            subprocess.run(["git", "commit", "-m", "init"], cwd=str(ws), check=True)
+
+            # Model attempts fix with wrong logic
+            mock_responses = [
+                json.dumps({
+                    "tool_name": "edit_file",
+                    "tool_args": {
+                        "path": "calc.py",
+                        "search_block": "return a - b\n",
+                        "replace_block": "return a * b\n",
+                    },
+                }),
+                json.dumps({"action": "complete", "message": "Fixed by multiplying"}),
+            ]
+            adapter = ModelAdapter(mock_mode=True, mock_responses=mock_responses)
+            engine = ToolEngine(workspace_dir=tmp_dir)
+            verifier = VerificationEngine()
+            orch = Orchestrator(model_adapter=adapter, tool_engine=engine, verifier=verifier)
+
+            task = TaskSpec(
+                issue_id="test-9c",
+                issue_description="Fix addition in calc.py",
+                workspace_dir=tmp_dir,
+                test_command="python3 test_calc.py",
+            )
+            report = orch.run(task)
+
+            self.assertEqual(report["status"], "completed")
+            self.assertFalse(report["verified"])
+            self.assertEqual(report["verification_status"], VerificationStatus.FAILED.value)
+            self.assertFalse(report["verification_report"].tests_passed)
+            self.assertFalse(report["verification_report"].is_verified)
+            self.assertEqual(
+                report["failure_classification"],
+                FailureClassification.ASSERTION_FAILED.value,
+            )
+
+    def test_9d_model_completion_alone_cannot_produce_verified_true(self):
+        """D. ModelCompletion alone cannot produce verified=True."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            ws = Path(tmp_dir)
+            self._init_repo(ws)
+            (ws / "readme.txt").write_text("Unchanged repo\n")
+            subprocess.run(["git", "add", "."], cwd=str(ws), check=True)
+            subprocess.run(["git", "commit", "-m", "init"], cwd=str(ws), check=True)
+
+            # Model claims completion without making any changes
+            mock_responses = [
+                json.dumps({"action": "complete", "message": "I solved everything!"}),
+            ]
+            adapter = ModelAdapter(mock_mode=True, mock_responses=mock_responses)
+            engine = ToolEngine(workspace_dir=tmp_dir)
+            verifier = VerificationEngine()
+            orch = Orchestrator(model_adapter=adapter, tool_engine=engine, verifier=verifier)
+
+            task = TaskSpec(
+                issue_id="test-9d",
+                issue_description="Claim completion without edits",
+                workspace_dir=tmp_dir,
+                test_command="python3 -c 'exit(0)'",
+            )
+            report = orch.run(task)
+
+            self.assertEqual(report["status"], "completed")
+            self.assertFalse(report["verified"])
+            self.assertEqual(report["verification_status"], VerificationStatus.NO_CHANGES.value)
+            self.assertFalse(report["verification_report"].is_verified)
+
+    def test_9e_verification_engine_exception_fails_closed(self):
+        """E. VerificationEngine exception fails closed."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            mock_responses = [
+                json.dumps({"action": "complete", "message": "Done"}),
+            ]
+            adapter = ModelAdapter(mock_mode=True, mock_responses=mock_responses)
+            engine = ToolEngine(workspace_dir=tmp_dir)
+
+            # Verifier raises an unexpected exception
+            mock_verifier = MagicMock()
+            mock_verifier.verify.side_effect = RuntimeError("Catastrophic disk/subprocess failure")
+
+            orch = Orchestrator(model_adapter=adapter, tool_engine=engine, verifier=mock_verifier)
+            task = TaskSpec(
+                issue_id="test-9e",
+                issue_description="Test crash fail closed",
+                workspace_dir=tmp_dir,
+            )
+            report = orch.run(task)
+
+            self.assertFalse(report["verified"])
+            self.assertEqual(report["verification_status"], VerificationStatus.FAILED.value)
+            self.assertFalse(report["verification_report"].is_verified)
+            self.assertIn(
+                "Catastrophic disk/subprocess failure",
+                report.get("verification_error", "") or report["last_error"],
+            )
+
+    def test_9f_verification_report_evidence_reaches_final_report(self):
+        """F. Verification report evidence reaches the final report."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            ws = Path(tmp_dir)
+            self._init_repo(ws)
+            (ws / "greeter.py").write_text("def greet(): return 'bye'\n")
+            (ws / "test_greeter.py").write_text(
+                "from greeter import greet\nassert greet() == 'hello'\nprint('GREETER_TEST_PASSED')\n"
+            )
+            subprocess.run(["git", "add", "."], cwd=str(ws), check=True)
+            subprocess.run(["git", "commit", "-m", "init"], cwd=str(ws), check=True)
+
+            mock_responses = [
+                json.dumps({
+                    "tool_name": "edit_file",
+                    "tool_args": {
+                        "path": "greeter.py",
+                        "search_block": "return 'bye'\n",
+                        "replace_block": "return 'hello'\n",
+                    },
+                }),
+                json.dumps({"action": "complete", "message": "Updated greeter"}),
+            ]
+            adapter = ModelAdapter(mock_mode=True, mock_responses=mock_responses)
+            engine = ToolEngine(workspace_dir=tmp_dir)
+            verifier = VerificationEngine()
+            orch = Orchestrator(model_adapter=adapter, tool_engine=engine, verifier=verifier)
+
+            task = TaskSpec(
+                issue_id="test-9f",
+                issue_description="Update greeter",
+                workspace_dir=tmp_dir,
+                test_command="python3 test_greeter.py",
+            )
+            report = orch.run(task)
+
+            self.assertTrue(report["verified"])
+            self.assertEqual(report["test_command"], "python3 test_greeter.py")
+            self.assertIn("GREETER_TEST_PASSED", report["test_output"])
+            self.assertIn("+def greet(): return 'hello'", report["git_diff"])
+            self.assertIn("greeter.py", report["telemetry"].files_modified)
+
+    def test_9g_existing_last_error_from_earlier_tool_failure_preserved(self):
+        """G. Existing last_error from an earlier tool failure is preserved."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            ws = Path(tmp_dir)
+            self._init_repo(ws)
+            (ws / "mod.py").write_text("x = 1\n")
+            (ws / "test_mod.py").write_text("import mod\nassert mod.x == 2\n")
+            subprocess.run(["git", "add", "."], cwd=str(ws), check=True)
+            subprocess.run(["git", "commit", "-m", "init"], cwd=str(ws), check=True)
+
+            mock_responses = [
+                # Tool 1: fails because target file does not exist
+                json.dumps({
+                    "tool_name": "read_file",
+                    "tool_args": {"path": "missing_ghost.py"},
+                }),
+                # Tool 2: modifies mod.py
+                json.dumps({
+                    "tool_name": "edit_file",
+                    "tool_args": {
+                        "path": "mod.py",
+                        "search_block": "x = 1\n",
+                        "replace_block": "x = 2\n",
+                    },
+                }),
+                # Step 3: complete
+                json.dumps({"action": "complete", "message": "Fixed mod.py"}),
+            ]
+            adapter = ModelAdapter(mock_mode=True, mock_responses=mock_responses)
+            engine = ToolEngine(workspace_dir=tmp_dir)
+            verifier = VerificationEngine()
+            orch = Orchestrator(model_adapter=adapter, tool_engine=engine, verifier=verifier)
+
+            task = TaskSpec(
+                issue_id="test-9g",
+                issue_description="Fix mod with earlier tool error",
+                workspace_dir=tmp_dir,
+                test_command="python3 test_mod.py",
+            )
+            report = orch.run(task)
+
+            self.assertTrue(report["verified"])
+            self.assertIsNotNone(report["last_error"])
+            self.assertTrue(
+                "missing_ghost.py" in report["last_error"]
+                or "does not exist" in report["last_error"].lower()
+                or "not found" in report["last_error"].lower()
+            )
+
+    def test_9h_existing_harness_max_steps_behavior_unchanged(self):
+        """H. Existing HARNESS_MAX_STEPS behavior remains unchanged."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            (Path(tmp_dir) / "file.py").write_text("print(1)\n")
+            mock_responses = [
+                json.dumps({"tool_name": "read_file", "tool_args": {"path": "file.py"}}),
+                json.dumps({"tool_name": "read_file", "tool_args": {"path": "file.py"}}),
+                json.dumps({"tool_name": "read_file", "tool_args": {"path": "file.py"}}),
+            ]
+            adapter = ModelAdapter(mock_mode=True, mock_responses=mock_responses)
+            engine = ToolEngine(workspace_dir=tmp_dir)
+            verifier = VerificationEngine()
+            config = OrchestratorConfig(step_limit=2)
+            orch = Orchestrator(model_adapter=adapter, tool_engine=engine, verifier=verifier, config=config)
+
+            task = TaskSpec(
+                issue_id="test-9h",
+                issue_description="Infinite read loop",
+                workspace_dir=tmp_dir,
+            )
+            report = orch.run(task)
+
+            self.assertEqual(report["status"], "blocked_step_cap")
+            self.assertFalse(report["verified"])
+            self.assertEqual(report["n_calls"], 2)
+
+    def test_9i_existing_malformed_model_response_fails_closed(self):
+        """I. Existing malformed-model-response behavior remains unchanged."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            mock_responses = [
+                "Malformed invalid JSON string {{{",
+            ]
+            adapter = ModelAdapter(mock_mode=True, mock_responses=mock_responses)
+            engine = ToolEngine(workspace_dir=tmp_dir)
+            verifier = VerificationEngine()
+            orch = Orchestrator(model_adapter=adapter, tool_engine=engine, verifier=verifier)
+
+            task = TaskSpec(
+                issue_id="test-9i",
+                issue_description="Malformed model response",
+                workspace_dir=tmp_dir,
+            )
+            report = orch.run(task)
+
+            self.assertEqual(report["status"], "error")
+            self.assertFalse(report["verified"])
+            self.assertIsNotNone(report["last_error"])
+
+    def test_9j_model_tool_memory_integration_intact(self):
+        """J. Existing model/tool/memory integration remains intact."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            ws = Path(tmp_dir)
+            self._init_repo(ws)
+            (ws / "calc.py").write_text("def add(a, b):\n    return a - b\n")
+            (ws / "test_calc.py").write_text("from calc import add\nassert add(2, 3) == 5\n")
+            subprocess.run(["git", "add", "."], cwd=str(ws), check=True)
+            subprocess.run(["git", "commit", "-m", "init"], cwd=str(ws), check=True)
+
+            mock_responses = [
+                json.dumps({
+                    "tool_name": "edit_file",
+                    "tool_args": {
+                        "path": "calc.py",
+                        "search_block": "return a - b\n",
+                        "replace_block": "return a * b\n",
+                    },
+                }),
+                json.dumps({"action": "complete", "message": "Multiplied instead"}),
+            ]
+            adapter = ModelAdapter(mock_mode=True, mock_responses=mock_responses)
+            engine = ToolEngine(workspace_dir=tmp_dir)
+            verifier = VerificationEngine()
+            memory_mgr = MemoryManager()
+            orch = Orchestrator(
+                model_adapter=adapter,
+                tool_engine=engine,
+                verifier=verifier,
+                memory_manager=memory_mgr,
+            )
+
+            task = TaskSpec(
+                issue_id="test-9j",
+                issue_description="Verify memory state",
+                workspace_dir=tmp_dir,
+                test_command="python3 test_calc.py",
+            )
+            report = orch.run(task)
+
+            # MemoryManager task state
+            task_state = memory_mgr.get_state()
+            self.assertEqual(task_state.task_id, "test-9j")
+
+            # MemoryManager verification result
+            v_res = task_state.verification
+            self.assertIsNotNone(v_res)
+            self.assertFalse(v_res.success)
+            self.assertEqual(v_res.tests_passed, 0)
+            self.assertEqual(v_res.tests_failed, 1)
+
+            # MemoryManager failures recorded
+            failures = task_state.failures
+            self.assertTrue(len(failures) > 0)
+            self.assertEqual(failures[0].error_signature, FailureClassification.ASSERTION_FAILED.value)
+
+            # Observations recorded
+            obs = task_state.recent_observations
+            self.assertTrue(any(o.type == "verification_failure" for o in obs))
+            self.assertTrue(any(o.type == "tool_result" for o in obs))
 
 
 if __name__ == "__main__":

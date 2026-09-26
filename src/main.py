@@ -11,6 +11,7 @@ from src.memory.manager import MemoryManager
 from src.orchestrator.model_adapter import ModelAdapter
 from src.orchestrator.orchestrator import Orchestrator, OrchestratorConfig
 from src.tools.registry import ToolEngine
+from src.verification.verifier import VerificationEngine
 
 
 class ContextAdapter:
@@ -60,15 +61,23 @@ def main():
         default=os.environ.get("HARNESS_WORKSPACE_DIR", "."),
         help="Workspace root directory to scan.",
     )
+    parser.add_argument(
+        "--test-command",
+        type=str,
+        default=os.environ.get("HARNESS_TEST_COMMAND"),
+        help="Command to run tests for verification.",
+    )
     args = parser.parse_args()
 
     workspace_dir = os.environ.get("HARNESS_WORKSPACE_DIR") or args.workspace or "."
     max_steps = int(os.environ.get("HARNESS_MAX_STEPS") or args.max_attempts or 30)
 
+    test_command = args.test_command or os.environ.get("HARNESS_TEST_COMMAND")
     task_spec = TaskSpec(
         issue_id="task-1",
         issue_description=args.issue,
         workspace_dir=workspace_dir,
+        test_command=test_command,
     )
 
     verbose = os.environ.get("HARNESS_VERBOSE", "").lower() in ("true", "1", "yes")
@@ -92,12 +101,14 @@ def main():
 
     tool_timeout = int(os.environ.get("HARNESS_TOOL_TIMEOUT", "60"))
     tool_engine = ToolEngine(workspace_dir=workspace_dir, default_timeout=tool_timeout)
+    verifier = VerificationEngine()
     model_adapter = ModelAdapter()
 
     config = OrchestratorConfig(step_limit=max_steps)
     orchestrator = Orchestrator(
         context=context,
         tool_engine=tool_engine,
+        verifier=verifier,
         model_adapter=model_adapter,
         memory_manager=memory,
         context_builder=builder,
@@ -109,6 +120,7 @@ def main():
 
     print("\n--- Final Report ---")
     print(f"Status: {report['status']}")
+    print(f"Verified: {report.get('verified', False)}")
     print(f"Attempts: {report.get('n_calls', 0)}")
     print(f"Cost: ${report.get('cost', 0.0):.2f}")
     if report.get("last_error"):
@@ -119,7 +131,7 @@ def main():
         hypothesis = getattr(scratchpad, "hypothesis", None) or getattr(scratchpad, "active_hypothesis", "")
         print(f"Final Hypothesis: {hypothesis}")
 
-    if report.get("status") in ("resolved", "completed"):
+    if report.get("status") in ("resolved", "completed") and report.get("verified", False):
         sys.exit(0)
     else:
         sys.exit(1)
