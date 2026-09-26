@@ -1,5 +1,6 @@
 """Comprehensive unit and integration tests for Track C tools subsystem."""
 
+from unittest.mock import patch
 import os
 from pathlib import Path
 import subprocess
@@ -158,7 +159,6 @@ class TestFileOps(unittest.TestCase):
         self.assertIn("inside content", res.output)
 
     def test_symlink_escape_prevention(self):
-        # Create an external directory and link to it inside workspace
         with tempfile.TemporaryDirectory() as ext_dir:
             secret_file = Path(ext_dir) / "secret.txt"
             secret_file.write_text("sensitive_data", encoding="utf-8")
@@ -199,7 +199,6 @@ class TestShellOps(unittest.TestCase):
         self.assertIn("timed out", res.error)
 
     def test_child_process_group_termination_on_timeout(self):
-        # Spawns a background sleep, writes its PID, and waits
         pid_file = self.ws / "child.pid"
         cmd = f'sleep 60 & echo $! > {pid_file.name} && wait'
         res = run_bash(cmd, timeout=1, workspace_dir=str(self.ws))
@@ -209,7 +208,6 @@ class TestShellOps(unittest.TestCase):
         time.sleep(0.2)
         if pid_file.exists():
             child_pid = int(pid_file.read_text().strip())
-            # Verify child process was killed and is no longer running
             with self.assertRaises(OSError):
                 os.kill(child_pid, 0)
 
@@ -238,12 +236,10 @@ class TestSearchOps(unittest.TestCase):
         self.test_dir = tempfile.TemporaryDirectory()
         self.ws = Path(self.test_dir.name).resolve()
 
-        # Create files for searching
         (self.ws / "src").mkdir()
         (self.ws / "src" / "alpha.py").write_text("def calculate_tax():\n    return 0.1\n")
         (self.ws / "src" / "beta.py").write_text("def calculate_discount():\n    return 0.2\n")
 
-        # Noise dir that should be ignored
         (self.ws / ".venv").mkdir()
         (self.ws / ".venv" / "calculate_ignored.py").write_text("def calculate_tax(): pass\n")
         (self.ws / ".git").mkdir()
@@ -251,7 +247,6 @@ class TestSearchOps(unittest.TestCase):
         (self.ws / "__pycache__").mkdir()
         (self.ws / "__pycache__" / "cached.py").write_text("def calculate_tax(): pass\n")
 
-        # Binary file that should be ignored
         with open(self.ws / "src" / "binary.bin", "wb") as f:
             f.write(b"def calculate_tax()\x00binarystuff")
 
@@ -278,7 +273,6 @@ class TestSearchOps(unittest.TestCase):
         self.assertTrue(res.success)
         self.assertEqual(res.tool_name, ToolName.LIST_DIRECTORY)
         self.assertIn("[DIR]  src/", res.output)
-        # Noise directories should be excluded
         self.assertNotIn(".venv", res.output)
         self.assertNotIn(".git", res.output)
 
@@ -288,7 +282,6 @@ class TestGitTools(unittest.TestCase):
         self.test_dir = tempfile.TemporaryDirectory()
         self.ws = Path(self.test_dir.name).resolve()
 
-        # Initialize real git repo
         subprocess.run(["git", "init"], cwd=str(self.ws), check=True, capture_output=True)
         subprocess.run(["git", "config", "user.name", "Tester"], cwd=str(self.ws), check=True)
         subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=str(self.ws), check=True)
@@ -302,7 +295,6 @@ class TestGitTools(unittest.TestCase):
         self.test_dir.cleanup()
 
     def test_git_diff_and_status(self):
-        # Modify file
         (self.ws / "initial.txt").write_text("version 2\n")
 
         status_res = git_status(workspace_dir=str(self.ws))
@@ -323,7 +315,6 @@ class TestToolEngine(unittest.TestCase):
         self.ws = Path(self.test_dir.name).resolve()
         self.engine = ToolEngine(workspace_dir=str(self.ws))
 
-        # Setup git repo in workspace for git tools
         subprocess.run(["git", "init"], cwd=str(self.ws), check=True, capture_output=True)
         subprocess.run(["git", "config", "user.name", "EngineTester"], cwd=str(self.ws), check=True)
         subprocess.run(["git", "config", "user.email", "engine@test.com"], cwd=str(self.ws), check=True)
@@ -334,7 +325,12 @@ class TestToolEngine(unittest.TestCase):
     def tearDown(self):
         self.test_dir.cleanup()
 
+    # -------------------------------------------------------------------------
+    # Phase 2 Dispatch & Hardening Tests
+    # -------------------------------------------------------------------------
+
     def test_all_canonical_tool_dispatches(self):
+        """Verifies every canonical ToolName dispatches and returns expected ToolResult shape."""
         # 1. WRITE_FILE
         res = self.engine.execute(ToolCall(
             tool_name=ToolName.WRITE_FILE,
@@ -343,6 +339,8 @@ class TestToolEngine(unittest.TestCase):
         ))
         self.assertTrue(res.success)
         self.assertEqual(res.tool_name, ToolName.WRITE_FILE)
+        self.assertEqual(res.exit_code, 0)
+        self.assertGreaterEqual(res.duration_sec, 0.0)
 
         # 2. READ_FILE
         res = self.engine.execute(ToolCall(
@@ -353,6 +351,7 @@ class TestToolEngine(unittest.TestCase):
         self.assertTrue(res.success)
         self.assertEqual(res.tool_name, ToolName.READ_FILE)
         self.assertIn("x = 10", res.output)
+        self.assertGreaterEqual(res.duration_sec, 0.0)
 
         # 3. EDIT_FILE
         res = self.engine.execute(ToolCall(
@@ -362,6 +361,7 @@ class TestToolEngine(unittest.TestCase):
         ))
         self.assertTrue(res.success)
         self.assertEqual(res.tool_name, ToolName.EDIT_FILE)
+        self.assertGreaterEqual(res.duration_sec, 0.0)
 
         # 4. RUN_BASH
         res = self.engine.execute(ToolCall(
@@ -371,6 +371,7 @@ class TestToolEngine(unittest.TestCase):
         ))
         self.assertTrue(res.success)
         self.assertEqual(res.tool_name, ToolName.RUN_BASH)
+        self.assertGreaterEqual(res.duration_sec, 0.0)
 
         # 5. RUN_TESTS
         res = self.engine.execute(ToolCall(
@@ -380,6 +381,7 @@ class TestToolEngine(unittest.TestCase):
         ))
         self.assertTrue(res.success)
         self.assertEqual(res.tool_name, ToolName.RUN_TESTS)
+        self.assertGreaterEqual(res.duration_sec, 0.0)
 
         # 6. GIT_DIFF
         res = self.engine.execute(ToolCall(
@@ -389,6 +391,7 @@ class TestToolEngine(unittest.TestCase):
         ))
         self.assertTrue(res.success)
         self.assertEqual(res.tool_name, ToolName.GIT_DIFF)
+        self.assertGreaterEqual(res.duration_sec, 0.0)
 
         # 7. GIT_STATUS
         res = self.engine.execute(ToolCall(
@@ -398,6 +401,7 @@ class TestToolEngine(unittest.TestCase):
         ))
         self.assertTrue(res.success)
         self.assertEqual(res.tool_name, ToolName.GIT_STATUS)
+        self.assertGreaterEqual(res.duration_sec, 0.0)
 
         # 8. GREP_SEARCH
         res = self.engine.execute(ToolCall(
@@ -408,6 +412,7 @@ class TestToolEngine(unittest.TestCase):
         self.assertTrue(res.success)
         self.assertEqual(res.tool_name, ToolName.GREP_SEARCH)
         self.assertIn("mod.py", res.output)
+        self.assertGreaterEqual(res.duration_sec, 0.0)
 
         # 9. LIST_DIRECTORY
         res = self.engine.execute(ToolCall(
@@ -418,26 +423,173 @@ class TestToolEngine(unittest.TestCase):
         self.assertTrue(res.success)
         self.assertEqual(res.tool_name, ToolName.LIST_DIRECTORY)
         self.assertIn("mod.py", res.output)
+        self.assertGreaterEqual(res.duration_sec, 0.0)
 
-    def test_missing_argument_handling(self):
+    def test_unknown_tool_name(self):
+        """Verifies unknown tool name returns ToolResult(success=False) with actionable error."""
         call = ToolCall(
-            tool_name=ToolName.READ_FILE,
-            tool_args={},  # Missing 'path'
-            call_id="call-err",
-        )
-        res = self.engine.execute(call)
-        self.assertFalse(res.success)
-        self.assertIn("Missing required argument 'path'", res.error)
-
-    def test_unhandled_crash_protection(self):
-        call = ToolCall(
-            tool_name=ToolName.READ_FILE,
-            tool_args={"path": "something.txt", "start_line": "not_an_int"},
-            call_id="call-type-err",
+            tool_name="NON_EXISTENT_TOOL",  # type: ignore
+            tool_args={},
+            call_id="call-unk",
         )
         res = self.engine.execute(call)
         self.assertIsInstance(res, ToolResult)
         self.assertFalse(res.success)
+        self.assertEqual(res.exit_code, 1)
+        self.assertIn("Unknown or unsupported tool", res.error)
+        self.assertIn("read_file", res.error)
+
+    def test_missing_required_arguments(self):
+        """Verifies missing required arguments for tools return clear error messages."""
+        # READ_FILE missing path
+        res = self.engine.execute(ToolCall(tool_name=ToolName.READ_FILE, tool_args={}, call_id="m1"))
+        self.assertFalse(res.success)
+        self.assertIn("Missing required argument: 'path'", res.error)
+
+        # EDIT_FILE missing search_block
+        res = self.engine.execute(ToolCall(
+            tool_name=ToolName.EDIT_FILE,
+            tool_args={"path": "a.txt"},
+            call_id="m2",
+        ))
+        self.assertFalse(res.success)
+        self.assertIn("Missing required argument: 'search_block'", res.error)
+
+        # WRITE_FILE missing content
+        res = self.engine.execute(ToolCall(
+            tool_name=ToolName.WRITE_FILE,
+            tool_args={"path": "a.txt"},
+            call_id="m3",
+        ))
+        self.assertFalse(res.success)
+        self.assertIn("Missing required argument: 'content'", res.error)
+
+        # RUN_BASH missing command
+        res = self.engine.execute(ToolCall(tool_name=ToolName.RUN_BASH, tool_args={}, call_id="m4"))
+        self.assertFalse(res.success)
+        self.assertIn("Missing required argument: 'command'", res.error)
+
+        # GREP_SEARCH missing query
+        res = self.engine.execute(ToolCall(tool_name=ToolName.GREP_SEARCH, tool_args={}, call_id="m5"))
+        self.assertFalse(res.success)
+        self.assertIn("Missing required argument: 'query'", res.error)
+
+    def test_wrong_argument_types(self):
+        """Verifies non-convertible argument types are caught cleanly with useful messages."""
+        # start_line not an integer
+        res = self.engine.execute(ToolCall(
+            tool_name=ToolName.READ_FILE,
+            tool_args={"path": "init.txt", "start_line": "not_an_int"},
+            call_id="w1",
+        ))
+        self.assertFalse(res.success)
+        self.assertIn("Invalid argument type: 'start_line'", res.error)
+
+        # path is integer instead of string
+        res = self.engine.execute(ToolCall(
+            tool_name=ToolName.READ_FILE,
+            tool_args={"path": 12345},
+            call_id="w2",
+        ))
+        self.assertFalse(res.success)
+        self.assertIn("must be a string", res.error)
+
+        # timeout not an integer
+        res = self.engine.execute(ToolCall(
+            tool_name=ToolName.RUN_BASH,
+            tool_args={"command": "echo ok", "timeout": "not_a_num"},
+            call_id="w3",
+        ))
+        self.assertFalse(res.success)
+        self.assertIn("Invalid argument type: 'timeout'", res.error)
+
+        # timeout negative integer
+        res = self.engine.execute(ToolCall(
+            tool_name=ToolName.RUN_BASH,
+            tool_args={"command": "echo ok", "timeout": -5},
+            call_id="w4",
+        ))
+        self.assertFalse(res.success)
+        self.assertIn("Invalid timeout", res.error)
+
+        # empty command
+        res = self.engine.execute(ToolCall(
+            tool_name=ToolName.RUN_BASH,
+            tool_args={"command": "   "},
+            call_id="w5",
+        ))
+        self.assertFalse(res.success)
+        self.assertIn("cannot be empty", res.error)
+
+    def test_malformed_tool_call_invocation(self):
+        """Verifies invocation with non-ToolCall or bad tool_args structure."""
+        # Non-ToolCall object
+        res = self.engine.execute("not_a_tool_call")  # type: ignore
+        self.assertIsInstance(res, ToolResult)
+        self.assertFalse(res.success)
+        self.assertIn("expected a ToolCall instance", res.error)
+
+        # tool_args is a string instead of dict
+        call_bad_args = ToolCall(
+            tool_name=ToolName.READ_FILE,
+            tool_args="not_a_dict",  # type: ignore
+            call_id="bad_args",
+        )
+        res = self.engine.execute(call_bad_args)
+        self.assertFalse(res.success)
+        self.assertIn("expected a dictionary", res.error)
+
+        # tool_args is None (should be handled safely as empty dict)
+        call_none_args = ToolCall(
+            tool_name=ToolName.READ_FILE,
+            tool_args=None,  # type: ignore
+            call_id="none_args",
+        )
+        res = self.engine.execute(call_none_args)
+        self.assertFalse(res.success)
+        self.assertIn("Missing required argument: 'path'", res.error)
+
+    def test_handler_exception_isolation(self):
+        """Verifies that an unhandled exception inside a handler never crashes execute()."""
+        with patch.object(self.engine, "read_file", side_effect=RuntimeError("Simulated filesystem driver crash")):
+            call = ToolCall(
+                tool_name=ToolName.READ_FILE,
+                tool_args={"path": "init.txt"},
+                call_id="c_err",
+            )
+            res = self.engine.execute(call)
+            self.assertIsInstance(res, ToolResult)
+            self.assertFalse(res.success)
+            self.assertEqual(res.exit_code, 1)
+            self.assertIn("Tool execution failed: RuntimeError", res.error)
+
+    def test_tool_result_contract_shape(self):
+        """Verifies that ToolResult fields conform strictly to PRD contract."""
+        call = ToolCall(
+            tool_name=ToolName.READ_FILE,
+            tool_args={"path": "init.txt"},
+            call_id="shape_check",
+        )
+        res = self.engine.execute(call)
+        self.assertIsInstance(res.tool_name, ToolName)
+        self.assertIsInstance(res.success, bool)
+        self.assertIsInstance(res.output, str)
+        self.assertIsInstance(res.exit_code, int)
+        self.assertIsInstance(res.duration_sec, float)
+        self.assertGreaterEqual(res.duration_sec, 0.0)
+
+    def test_timeout_representation_via_execute(self):
+        """Verifies that timeouts executed via execute() preserve exit_code 124 and timing."""
+        call = ToolCall(
+            tool_name=ToolName.RUN_BASH,
+            tool_args={"command": "python3 -c 'import time; time.sleep(5)'", "timeout": 1},
+            call_id="timeout_call",
+        )
+        res = self.engine.execute(call)
+        self.assertFalse(res.success)
+        self.assertEqual(res.exit_code, 124)
+        self.assertIn("timed out", res.error)
+        self.assertGreaterEqual(res.duration_sec, 0.9)
 
 
 if __name__ == "__main__":
