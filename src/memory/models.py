@@ -514,3 +514,6 @@ class TaskState:
     @classmethod
     def from_json(cls, json_str: str) -> TaskState:
         return cls.from_dict(json.loads(json_str))
+
+
+VerificationResult = VerificationSnapshot

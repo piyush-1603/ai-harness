@@ -46,6 +46,7 @@ from src.memory.models import (
     TaskState,
     TaskStatus,
 )
+from src.memory.adapters import observation_from_tool_result, attempt_from_tool_result
 from src.orchestrator.model_adapter import (
     ModelAdapter,
     ModelAPIError,
@@ -79,38 +80,45 @@ class State(Enum):
 
 
 class Orchestrator:
-    def __init__(self, context, tool_engine, verifier, model, config: OrchestratorConfig = None):
+    def __init__(
+        self,
+        context=None,
+        tools=None,
+        verifier=None,
+        model=None,
+        config: OrchestratorConfig = None,
+        model_adapter=None,
+        tool_engine=None,
+        memory_manager=None,
+        context_builder=None,
+    ):
         """
         context: object implementing get_scratchpad() / update_scratchpad()
+        tools: object implementing explore(), edit(), verify() (legacy)
         tool_engine: object implementing execute(ToolCall)
         verifier: object implementing verify() -> VerificationResult
         model: object implementing decide(prompt) -> Union[ToolCall, ModelCompletion]
         config: OrchestratorConfig holding step_limit, cost_limit, templates
         """
         self.context = context
-        self.tool_engine = tool_engine
         self.verifier = verifier
         self.model = model
         self.config = config or OrchestratorConfig()
 
         self._is_legacy_stub = (
-            self.tools is not None
-            and hasattr(self.tools, "explore")
-            and hasattr(self.tools, "edit")
-            and hasattr(self.tools, "verify")
-            and not hasattr(self.tools, "execute")
-            and model_adapter is None
+            model_adapter is None and tool_engine is None
         )
 
         # ModelAdapter
         self.model_adapter = model_adapter or ModelAdapter()
 
         # ToolEngine resolution
-        if tool_engine is not None:
+        if tool_engine is not None and hasattr(tool_engine, "execute"):
             self.tool_engine = tool_engine
-        elif isinstance(tools, ToolEngine):
-            self.tool_engine = tools
         elif tools is not None and hasattr(tools, "execute"):
+            self.tool_engine = tools
+        elif tools is not None:
+            # Fallback to tools for legacy tests that pass StubToolEngine
             self.tool_engine = tools
         else:
             workspace_dir = os.environ.get("HARNESS_WORKSPACE_DIR", ".")
@@ -160,10 +168,6 @@ class Orchestrator:
             task_id=task_spec.issue_id,
             task=task_spec.issue_description,
         )
-
-        if self.context is None:
-            self.context = StubContext()
-        self.context.update_scratchpad(hypothesis=f"Investigating: {task_spec.issue_description}")
 
         step_count = 0
         max_steps = self.config.step_limit
@@ -292,36 +296,27 @@ class Orchestrator:
                                     sp.files_touched.append(arg_path)
 
                 # Record observation
-                output_summary = (tool_result.output or tool_result.error or "")[:300]
-                self.memory_manager.record_observation(
-                    Observation(
-                        type="tool_result",
-                        source=decision.tool_name.value,
-                        summary=f"{decision.tool_name.value} ({'success' if tool_result.success else 'failed'}): {output_summary}",
-                        raw_output=tool_result.output if tool_result.success else (tool_result.error or tool_result.output),
-                        files=[arg_path] if arg_path else [],
-                    )
+                obs = observation_from_tool_result(
+                    result=tool_result,
+                    files=[arg_path] if arg_path else []
                 )
+                self.memory_manager.record_observation(obs)
 
                 # Record attempt
-                self.memory_manager.record_attempt(
-                    Attempt(
-                        id=f"step_{step_count}",
-                        action=f"{decision.tool_name.value}({json.dumps(decision.tool_args, sort_keys=True)})",
-                        success=tool_result.success,
-                        files_touched=[arg_path] if decision.tool_name in (ToolName.EDIT_FILE, ToolName.WRITE_FILE) and arg_path else [],
-                        result=output_summary,
-                    )
+                action_str = f"{decision.tool_name.value}({json.dumps(decision.tool_args, sort_keys=True)})"
+                attempt = attempt_from_tool_result(
+                    result=tool_result,
+                    attempt_id=f"step_{step_count}",
+                    action=action_str,
+                    files_touched=[arg_path] if decision.tool_name in (ToolName.EDIT_FILE, ToolName.WRITE_FILE) and arg_path else [],
+                    iteration=step_count
                 )
+                self.memory_manager.record_attempt(attempt)
                 self.memory_manager.record_tool_call()
-
-                if hasattr(self.context, "update_scratchpad"):
-                    self.context.update_scratchpad(
-                        attempt=f"{decision.tool_name.value} -> {'success' if tool_result.success else 'failure'}: {output_summary}"
-                    )
 
                 if not tool_result.success:
                     self.last_error = tool_result.error or f"Tool {decision.tool_name.value} failed"
+                    output_summary = (tool_result.output or tool_result.error or "")[:300]
                     self.memory_manager.add_failure(
                         Failure(
                             error_signature=f"{decision.tool_name.value}:{tool_result.error or 'failed'}",
