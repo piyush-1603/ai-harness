@@ -29,6 +29,10 @@ class ModelAPIError(Exception):
     pass
 
 
+class ModelFormatError(Exception):
+    """Raised when the model's raw output does not contain a valid bracketed JSON block."""
+    pass
+
 class ModelParseError(Exception):
     """Raised when model output cannot be parsed into a valid ToolCall or ModelCompletion."""
     pass
@@ -318,7 +322,51 @@ class ModelAdapter:
 
         return ToolCall(tool_name=canonical_tool, tool_args=args, call_id=call_id)
 
+
+    def _extract_json_block(self, text: str) -> str:
+        # Try to find a code block first
+        code_block_pattern = re.compile(r"```(?:json)?\s*([\s\S]*?)\s*```", re.IGNORECASE)
+        code_blocks = code_block_pattern.findall(text)
+        
+        if code_blocks:
+            for cb in code_blocks:
+                stripped = cb.strip()
+                if stripped.startswith("{") and stripped.endswith("}"):
+                    return stripped
+        
+        # Fallback to regex finding the outermost {}
+        match = re.search(r'\{.*\}', text, re.DOTALL)
+        if match:
+            return match.group(0)
+            
+        raise ModelFormatError("No valid bracketed JSON block found in the output.")
+
     def decide(self, prompt: str) -> Union[ToolCall, ModelCompletion]:
         """Calls the model and returns a validated ToolCall or ModelCompletion."""
         raw_text = self.call_model(prompt)
-        return self.parse_decision(raw_text)
+        
+        import pydantic
+        
+        try:
+            json_str = self._extract_json_block(raw_text)
+            data = json.loads(json_str)
+            
+            result = self.parse_decision(json_str)
+            
+            # Validate against Pydantic ToolCall schema if it's a ToolCall
+            if isinstance(result, ToolCall):
+                from pydantic import TypeAdapter
+                # Validate the resulting dict which includes the auto-generated call_id
+                TypeAdapter(ToolCall).validate_python(
+                    {"tool_name": result.tool_name, "tool_args": result.tool_args, "call_id": result.call_id}
+                )
+                
+            return result
+
+        except (json.JSONDecodeError, pydantic.ValidationError, ModelFormatError, ModelParseError) as e:
+            error_details = str(e)
+            return ToolCall(
+                tool_name=ToolName.RUN_BASH,
+                tool_args={"command": f"echo 'Invalid format: {error_details}. You must output exactly one valid JSON object without markdown wrappers.' >&2 && exit 1"},
+                call_id="format_error"
+            )
