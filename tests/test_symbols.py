@@ -526,3 +526,255 @@ def test_realistic_integration_python_and_javascript(tmp_path: Path) -> None:
     assert "## TEST SUITE" in full_text
     assert "## SYMBOLS & IMPORTS" in full_text
     assert "src/builder.py" in full_text
+
+
+def test_local_python_module_resolution(tmp_path: Path) -> None:
+    """Verify absolute project Python imports resolve to repository-relative files."""
+    repo = tmp_path / "py_local_repo"
+    repo.mkdir()
+
+    (repo / "src" / "memory").mkdir(parents=True)
+    (repo / "src" / "memory" / "__init__.py").write_text("")
+    (repo / "src" / "memory" / "models.py").write_text("class TaskState: pass\nclass Attempt: pass\n")
+    (repo / "src" / "memory" / "manager.py").write_text("class MemoryManager: pass\n")
+
+    (repo / "src" / "builder.py").write_text(
+        "from src.memory.models import TaskState\n"
+        "from src.memory.manager import MemoryManager\n"
+        "class ContextBuilder: pass\n"
+    )
+
+    scanner = RepositoryScanner()
+    index = scanner.scan(repo)
+
+    builder_fs = index.file_symbols["src/builder.py"]
+    assert "src.memory.models" in builder_fs.imports
+    assert "src.memory.manager" in builder_fs.imports
+
+    # Check local_imports resolved to repository paths
+    assert "src/memory/models.py" in builder_fs.local_imports
+    assert "src/memory/manager.py" in builder_fs.local_imports
+
+
+def test_relative_python_import_resolution(tmp_path: Path) -> None:
+    """Verify relative Python imports (. and ..) resolve to local files."""
+    repo = tmp_path / "py_rel_repo"
+    repo.mkdir()
+
+    (repo / "src" / "context").mkdir(parents=True)
+    (repo / "src" / "context" / "bundle.py").write_text("class Bundle: pass\n")
+    (repo / "src" / "context" / "config.py").write_text("class Config: pass\n")
+
+    (repo / "src" / "memory").mkdir(parents=True)
+    (repo / "src" / "memory" / "models.py").write_text("class TaskState: pass\n")
+
+    (repo / "src" / "context" / "builder.py").write_text(
+        "from .bundle import Bundle\n"
+        "from .config import Config\n"
+        "from ..memory.models import TaskState\n"
+        "class Builder: pass\n"
+    )
+
+    scanner = RepositoryScanner()
+    index = scanner.scan(repo)
+
+    builder_fs = index.file_symbols["src/context/builder.py"]
+    assert ".bundle" in builder_fs.imports
+    assert ".config" in builder_fs.imports
+    assert "..memory.models" in builder_fs.imports
+
+    assert "src/context/bundle.py" in builder_fs.local_imports
+    assert "src/context/config.py" in builder_fs.local_imports
+    assert "src/memory/models.py" in builder_fs.local_imports
+
+
+def test_standard_library_imports_excluded_from_local_imports(tmp_path: Path) -> None:
+    """Verify stdlib imports (os, sys, typing, etc.) are excluded from local_imports."""
+    repo = tmp_path / "py_stdlib_repo"
+    repo.mkdir()
+
+    (repo / "worker.py").write_text(
+        "import os\n"
+        "import sys\n"
+        "import json\n"
+        "from pathlib import Path\n"
+        "from typing import Any, Optional\n"
+        "def work(): pass\n"
+    )
+
+    scanner = RepositoryScanner()
+    index = scanner.scan(repo)
+
+    fs = index.file_symbols["worker.py"]
+    # All must remain in imports
+    assert "os" in fs.imports
+    assert "sys" in fs.imports
+    assert "json" in fs.imports
+    assert "pathlib" in fs.imports
+    assert "typing" in fs.imports
+
+    # None must be in local_imports
+    assert fs.local_imports == []
+
+
+def test_unresolved_third_party_imports_excluded_from_local_imports(tmp_path: Path) -> None:
+    """Verify third-party package imports (pytest, requests, etc.) are excluded from local_imports."""
+    repo = tmp_path / "py_pkg_repo"
+    repo.mkdir()
+
+    (repo / "app.py").write_text(
+        "import pytest\n"
+        "import requests\n"
+        "import fastapi\n"
+        "def run(): pass\n"
+    )
+
+    scanner = RepositoryScanner()
+    index = scanner.scan(repo)
+
+    fs = index.file_symbols["app.py"]
+    assert "pytest" in fs.imports
+    assert "requests" in fs.imports
+    assert "fastapi" in fs.imports
+
+    assert fs.local_imports == []
+
+
+def test_relative_js_ts_import_resolution(tmp_path: Path) -> None:
+    """Verify relative JS/TS imports (with and without extension, and index) resolve."""
+    repo = tmp_path / "ts_local_repo"
+    repo.mkdir()
+
+    (repo / "src" / "components").mkdir(parents=True)
+    (repo / "src" / "components" / "Button.tsx").write_text("export const Button = () => null;\n")
+    (repo / "src" / "components" / "index.ts").write_text("export * from './Button';\n")
+    (repo / "src" / "styles.css").write_text("/* styles */")
+    (repo / "src" / "utils.ts").write_text("export function helper(): void {}\n")
+
+    (repo / "src" / "app.tsx").write_text(
+        "import { helper } from './utils';\n"
+        "import { Button } from './components';\n"
+        "import './styles.css';\n"
+        "export const App = () => null;\n"
+    )
+
+    scanner = RepositoryScanner()
+    index = scanner.scan(repo)
+
+    app_fs = index.file_symbols["src/app.tsx"]
+    assert "./utils" in app_fs.imports
+    assert "./components" in app_fs.imports
+    assert "./styles.css" in app_fs.imports
+
+    assert "src/utils.ts" in app_fs.local_imports
+    assert "src/components/index.ts" in app_fs.local_imports
+    assert "src/styles.css" in app_fs.local_imports
+
+
+def test_unresolved_package_imports_excluded_in_js_ts(tmp_path: Path) -> None:
+    """Verify external npm packages (react, axios, lodash) are not in local_imports."""
+    repo = tmp_path / "ts_pkg_repo"
+    repo.mkdir()
+
+    (repo / "index.ts").write_text(
+        "import React from 'react';\n"
+        "import axios from 'axios';\n"
+        "import { get } from 'lodash';\n"
+        "export function main() {}\n"
+    )
+
+    scanner = RepositoryScanner()
+    index = scanner.scan(repo)
+
+    fs = index.file_symbols["index.ts"]
+    assert "react" in fs.imports
+    assert "axios" in fs.imports
+    assert "lodash" in fs.imports
+
+    assert fs.local_imports == []
+
+
+def test_deterministic_local_import_resolution(tmp_path: Path) -> None:
+    """Verify repeated scans produce identical local_imports ordering."""
+    repo = tmp_path / "determ_local_repo"
+    repo.mkdir()
+
+    (repo / "a.py").write_text("def a(): pass\n")
+    (repo / "b.py").write_text("def b(): pass\n")
+    (repo / "c.py").write_text("import b\nimport a\ndef c(): pass\n")
+
+    scanner1 = RepositoryScanner()
+    scanner2 = RepositoryScanner()
+
+    idx1 = scanner1.scan(repo)
+    idx2 = scanner2.scan(repo)
+
+    assert idx1.file_symbols["c.py"].local_imports == idx2.file_symbols["c.py"].local_imports
+    assert idx1.file_symbols["c.py"].local_imports == ["a.py", "b.py"]
+
+
+def test_serialization_of_local_imports(tmp_path: Path) -> None:
+    """Verify local_imports survive RepositoryIndex JSON serialization round-trip."""
+    repo = tmp_path / "serde_local_repo"
+    repo.mkdir()
+
+    (repo / "helper.py").write_text("def help(): pass\n")
+    (repo / "main.py").write_text("import helper\ndef run(): pass\n")
+
+    scanner = RepositoryScanner()
+    original_index = scanner.scan(repo)
+
+    raw_json = original_index.to_json()
+    reloaded_index = RepositoryIndex.from_dict(original_index.to_dict())
+
+    fs_orig = original_index.file_symbols["main.py"]
+    fs_reload = reloaded_index.file_symbols["main.py"]
+
+    assert fs_orig.local_imports == fs_reload.local_imports
+    assert fs_reload.local_imports == ["helper.py"]
+    assert '"local_imports": [' in raw_json
+
+
+def test_integration_local_imports_rendering(tmp_path: Path) -> None:
+    """Integration test: verify compact rendering shows 'local imports:' clearly."""
+    repo = tmp_path / "render_local_repo"
+    repo.mkdir()
+
+    (repo / "src" / "memory").mkdir(parents=True)
+    (repo / "src" / "memory" / "models.py").write_text("class TaskState: pass\n")
+    (repo / "src" / "memory" / "manager.py").write_text("class MemoryManager: pass\n")
+
+    (repo / "src" / "context").mkdir(parents=True)
+    (repo / "src" / "context" / "bundle.py").write_text("class ContextBundle: pass\n")
+    (repo / "src" / "context" / "config.py").write_text("class ContextConfig: pass\n")
+
+    (repo / "src" / "context" / "builder.py").write_text(
+        "import os\n"
+        "from typing import Optional\n"
+        "from src.context.bundle import ContextBundle\n"
+        "from src.context.config import ContextConfig\n"
+        "from src.memory.manager import MemoryManager\n"
+        "from src.memory.models import TaskState\n\n"
+        "class ContextBuilder:\n"
+        "    def build(self):\n"
+        "        pass\n"
+        "    def render_text(self):\n"
+        "        pass\n"
+    )
+
+    scanner = RepositoryScanner()
+    index = scanner.scan(repo)
+
+    builder_fs = index.file_symbols["src/context/builder.py"]
+    assert "src/context/bundle.py" in builder_fs.local_imports
+    assert "src/context/config.py" in builder_fs.local_imports
+    assert "src/memory/manager.py" in builder_fs.local_imports
+    assert "src/memory/models.py" in builder_fs.local_imports
+
+    # Check that rendering prefers local imports
+    rendered = index.render_symbols()
+    assert "src/context/builder.py" in rendered
+    assert "class: ContextBuilder" in rendered
+    assert "methods: build, render_text" in rendered
+    assert "local imports: src/context/bundle.py, src/context/config.py, src/memory/manager.py, src/memory/models.py" in rendered
+

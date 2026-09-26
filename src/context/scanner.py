@@ -15,6 +15,7 @@ from src.context.symbols import (
     SymbolRecord,
     extract_file_symbols,
     format_file_symbols,
+    resolve_file_local_imports,
 )
 
 
@@ -1001,6 +1002,18 @@ class RepositoryScanner:
         source_files.sort()
         source_directories.sort()
         documentation_files.sort()
+
+        # Pass 2: Resolve local repository imports
+        repo_files_set = set(discovered_files)
+        for rel_file, fs in file_symbols.items():
+            full_path = root_path / rel_file
+            fs.local_imports = resolve_file_local_imports(
+                file_path=full_path,
+                rel_path=rel_file,
+                language=fs.language,
+                imports=fs.imports,
+                repo_files=repo_files_set,
+            )
 
         return RepositoryIndex(
             root_dir=str(root_path),

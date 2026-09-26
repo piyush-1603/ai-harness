@@ -56,6 +56,7 @@ class FileSymbols:
     language: str
     symbols: list[SymbolRecord] = field(default_factory=list)
     imports: list[str] = field(default_factory=list)
+    local_imports: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -63,6 +64,7 @@ class FileSymbols:
             "language": self.language,
             "symbols": [s.to_dict() for s in self.symbols],
             "imports": list(self.imports),
+            "local_imports": list(self.local_imports),
         }
 
     @classmethod
@@ -72,6 +74,7 @@ class FileSymbols:
             language=data.get("language", ""),
             symbols=[SymbolRecord.from_dict(s) for s in data.get("symbols", [])],
             imports=list(data.get("imports", [])),
+            local_imports=list(data.get("local_imports", [])),
         )
 
 
@@ -83,6 +86,7 @@ def extract_python_symbols(
     content: str,
     rel_path: str,
     max_symbols: int = 100,
+    repo_files: Optional[set[str]] = None,
 ) -> FileSymbols:
     """
     Extract functions, classes, methods, and imports from Python source using `ast`.
@@ -91,7 +95,7 @@ def extract_python_symbols(
     try:
         tree = ast.parse(content, filename=rel_path)
     except (SyntaxError, IndentationError, ValueError, MemoryError):
-        return FileSymbols(path=rel_path, language="Python", symbols=[], imports=[])
+        return FileSymbols(path=rel_path, language="Python", symbols=[], imports=[], local_imports=[])
 
     symbols: list[SymbolRecord] = []
     imports_set: set[str] = set()
@@ -197,12 +201,26 @@ def extract_python_symbols(
 
     # Sort symbols deterministically by start line, then name
     symbols.sort(key=lambda s: (s.line_start or 0, s.name))
+    raw_imports = sorted(list(imports_set))
+
+    # Resolve local imports if repo_files is provided
+    local_imports: list[str] = []
+    if repo_files is not None:
+        local_imports = resolve_file_local_imports(
+            file_path=Path(rel_path),
+            rel_path=rel_path,
+            language="Python",
+            imports=raw_imports,
+            repo_files=repo_files,
+            content=content,
+        )
 
     return FileSymbols(
         path=rel_path,
         language="Python",
         symbols=symbols,
-        imports=sorted(list(imports_set)),
+        imports=raw_imports,
+        local_imports=local_imports,
     )
 
 
@@ -210,17 +228,14 @@ def extract_python_symbols(
 # JavaScript / TypeScript Extraction (Deterministic Regex / Line-based)
 # ---------------------------------------------------------------------------
 
-# Function declaration: function foo(...) or async function foo(...)
 RE_JS_FUNCTION = re.compile(
     r"^(?P<export>export\s+)?(?P<default>default\s+)?(?P<async>async\s+)?function\s+(?P<name>[a-zA-Z0-9_$]+)\s*\("
 )
 
-# Class declaration: class Foo or export class Foo
 RE_JS_CLASS = re.compile(
     r"^(?P<export>export\s+)?(?P<default>default\s+)?class\s+(?P<name>[a-zA-Z0-9_$]+)"
 )
 
-# Arrow function or assigned function: const foo = (...) => or export const foo = function(...)
 RE_JS_VAR_FUNCTION = re.compile(
     r"^(?P<export>export\s+)?(?:const|let|var)\s+(?P<name>[a-zA-Z0-9_$]+)\s*(?::\s*[^=]+)?=\s*(?P<async>async\s+)?(?:\([^)]*\)|[a-zA-Z0-9_$]+)\s*=>"
 )
@@ -228,16 +243,12 @@ RE_JS_VAR_FUNC_EXPR = re.compile(
     r"^(?P<export>export\s+)?(?:const|let|var)\s+(?P<name>[a-zA-Z0-9_$]+)\s*(?::\s*[^=]+)?=\s*(?P<async>async\s+)?function"
 )
 
-# Class method: methodName(...) { or async methodName(...) {
 RE_JS_METHOD = re.compile(
     r"^\s+(?:(?:public|private|protected|static|readonly|override)\s+)*(?P<async>async\s+)?(?P<name>[a-zA-Z0-9_$]+)\s*\([^)]*\)\s*(?::\s*[^{]+)?\s*\{"
 )
 
-# ES Module imports: import ... from '...' or import '...'
 RE_ES_IMPORT_FROM = re.compile(r"""(?:^|\s)import\s+.*?\s+from\s+['"]([^'"]+)['"]""")
 RE_ES_IMPORT_BARE = re.compile(r"""(?:^|\s)import\s+['"]([^'"]+)['"]""")
-
-# CommonJS require: require('...')
 RE_CJS_REQUIRE = re.compile(r"""require\s*\(\s*['"]([^'"]+)['"]\s*\)""")
 
 
@@ -246,6 +257,7 @@ def extract_javascript_symbols(
     rel_path: str,
     language: str,
     max_symbols: int = 100,
+    repo_files: Optional[set[str]] = None,
 ) -> FileSymbols:
     """
     Extract functions, classes, methods, and imports from JS/TS source code deterministically.
@@ -386,13 +398,155 @@ def extract_javascript_symbols(
             continue
 
     symbols.sort(key=lambda s: (s.line_start or 0, s.name))
+    raw_imports = sorted(list(imports_set))
+
+    local_imports: list[str] = []
+    if repo_files is not None:
+        local_imports = resolve_file_local_imports(
+            file_path=Path(rel_path),
+            rel_path=rel_path,
+            language=language,
+            imports=raw_imports,
+            repo_files=repo_files,
+            content=content,
+        )
 
     return FileSymbols(
         path=rel_path,
         language=language,
         symbols=symbols,
-        imports=sorted(list(imports_set)),
+        imports=raw_imports,
+        local_imports=local_imports,
     )
+
+
+# ---------------------------------------------------------------------------
+# Local Import Resolution Helpers (Phase B3.2.1)
+# ---------------------------------------------------------------------------
+
+def resolve_python_import_string(
+    import_str: str,
+    importer_rel_path: str,
+    repo_files: set[str],
+) -> Optional[str]:
+    """
+    Resolve a Python import string to a repository-relative file path if local.
+    Returns None if the import cannot be resolved to a local file.
+    """
+    # Relative import (starts with one or more dots)
+    if import_str.startswith("."):
+        leading_dots = len(import_str) - len(import_str.lstrip("."))
+        module_part = import_str.lstrip(".")
+        importer_dir = Path(importer_rel_path).parent
+
+        target_dir = importer_dir
+        for _ in range(leading_dots - 1):
+            target_dir = target_dir.parent
+
+        if module_part:
+            subpath = module_part.replace(".", "/")
+            base = os.path.normpath((target_dir / subpath).as_posix()).replace("\\", "/")
+        else:
+            base = os.path.normpath(target_dir.as_posix()).replace("\\", "/")
+
+        for candidate in (f"{base}.py", f"{base}/__init__.py", f"{base}.pyi", base):
+            if candidate in repo_files:
+                return candidate
+        return None
+
+    # Absolute project import (relative to repository root)
+    path_base = import_str.replace(".", "/")
+    for candidate in (f"{path_base}.py", f"{path_base}/__init__.py", f"{path_base}.pyi", path_base):
+        if candidate in repo_files:
+            return candidate
+
+    return None
+
+
+def resolve_javascript_import_string(
+    import_str: str,
+    importer_rel_path: str,
+    repo_files: set[str],
+) -> Optional[str]:
+    """
+    Resolve a JavaScript/TypeScript relative import string to a repository-relative file.
+    Does not attempt node_modules or package resolution.
+    """
+    if not import_str.startswith("."):
+        return None
+
+    importer_dir = Path(importer_rel_path).parent
+    combined = os.path.normpath((importer_dir / import_str).as_posix()).replace("\\", "/")
+
+    # 1. Exact match (e.g. ./styles.css)
+    if combined in repo_files:
+        return combined
+
+    # 2. Common extensions
+    for ext in (".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"):
+        cand = f"{combined}{ext}"
+        if cand in repo_files:
+            return cand
+
+    # 3. Directory index files
+    for ext in (".ts", ".tsx", ".js", ".jsx"):
+        cand = f"{combined}/index{ext}"
+        if cand in repo_files:
+            return cand
+
+    return None
+
+
+def resolve_file_local_imports(
+    file_path: Path,
+    rel_path: str,
+    language: str,
+    imports: list[str],
+    repo_files: set[str],
+    content: Optional[str] = None,
+) -> list[str]:
+    """
+    Determine which imports resolve to files/modules inside the scanned repository.
+    Deterministic, conservative, and never guesses.
+    """
+    local_resolved: set[str] = set()
+
+    if language == "Python":
+        # Resolve from raw imports list first
+        for imp in imports:
+            resolved = resolve_python_import_string(imp, rel_path, repo_files)
+            if resolved:
+                local_resolved.add(resolved)
+
+        # Also inspect AST to resolve `from package import submodule`
+        if content is None:
+            try:
+                content = file_path.read_text(encoding="utf-8", errors="replace")
+            except (OSError, PermissionError):
+                content = ""
+
+        if content:
+            try:
+                tree = ast.parse(content, filename=rel_path)
+                for node in ast.walk(tree):
+                    if isinstance(node, ast.ImportFrom):
+                        level_dots = "." * node.level if node.level else ""
+                        base_mod = f"{level_dots}{node.module}" if node.module else level_dots
+                        for alias in node.names:
+                            candidate_imp = f"{base_mod}.{alias.name}" if base_mod and not base_mod.endswith(".") else f"{base_mod}{alias.name}"
+                            resolved = resolve_python_import_string(candidate_imp, rel_path, repo_files)
+                            if resolved:
+                                local_resolved.add(resolved)
+            except Exception:
+                pass
+
+    elif language in ("JavaScript", "TypeScript"):
+        for imp in imports:
+            resolved = resolve_javascript_import_string(imp, rel_path, repo_files)
+            if resolved:
+                local_resolved.add(resolved)
+
+    return sorted(list(local_resolved))
 
 
 # ---------------------------------------------------------------------------
@@ -404,6 +558,7 @@ def extract_file_symbols(
     rel_path: str,
     language: str,
     max_symbols: int = 100,
+    repo_files: Optional[set[str]] = None,
 ) -> Optional[FileSymbols]:
     """
     Extract symbols and imports from supported source code files.
@@ -415,9 +570,9 @@ def extract_file_symbols(
         return None
 
     if language == "Python":
-        return extract_python_symbols(content, rel_path, max_symbols=max_symbols)
+        return extract_python_symbols(content, rel_path, max_symbols=max_symbols, repo_files=repo_files)
     elif language in ("JavaScript", "TypeScript"):
-        return extract_javascript_symbols(content, rel_path, language=language, max_symbols=max_symbols)
+        return extract_javascript_symbols(content, rel_path, language=language, max_symbols=max_symbols, repo_files=repo_files)
 
     return None
 
@@ -429,6 +584,7 @@ def extract_file_symbols(
 def format_file_symbols(fs: FileSymbols) -> list[str]:
     """
     Format a FileSymbols object into compact, deterministic lines.
+    Prefers local imports over raw imports when available.
     """
     lines: list[str] = [fs.path]
 
@@ -463,7 +619,10 @@ def format_file_symbols(fs: FileSymbols) -> list[str]:
     if other_syms:
         lines.append(f"  symbols: {', '.join(other_syms)}")
 
-    if fs.imports:
+    # Prefer local imports in compact rendering
+    if fs.local_imports:
+        lines.append(f"  local imports: {', '.join(fs.local_imports)}")
+    elif fs.imports:
         lines.append(f"  imports: {', '.join(fs.imports)}")
 
     return lines

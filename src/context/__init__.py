@@ -18,7 +18,11 @@ from src.context.scanner import (
     is_important_file,
     is_test_file,
 )
-from src.context.symbols import FileSymbols, SymbolRecord
+from src.context.symbols import (
+    FileSymbols,
+    SymbolRecord,
+    resolve_file_local_imports,
+)
 
 __all__ = [
     "ContextBuilder",
@@ -30,6 +34,7 @@ __all__ = [
     "FileRole",
     "FileSymbols",
     "SymbolRecord",
+    "resolve_file_local_imports",
     "classify_file_role",
     "is_documentation_file",
     "is_config_file",
