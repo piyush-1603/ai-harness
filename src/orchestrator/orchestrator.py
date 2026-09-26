@@ -13,6 +13,8 @@ everyone codes to the same contract below.
 
 from dataclasses import dataclass, field
 from src.common.types import ToolResult, ScratchpadState, VerificationResult
+from src.common.types import ToolCall, ToolName
+from src.orchestrator.model_adapter import ModelCompletion
 
 from enum import Enum, auto
 from typing import Optional
@@ -49,14 +51,18 @@ class State(Enum):
 
 
 class Orchestrator:
-    def __init__(self, context, tools, config: OrchestratorConfig = None):
+    def __init__(self, context, tool_engine, verifier, model, config: OrchestratorConfig = None):
         """
         context: object implementing get_scratchpad() / update_scratchpad()
-        tools:   object implementing explore(), edit(), verify()
-        config:  OrchestratorConfig holding step_limit, cost_limit, templates
+        tool_engine: object implementing execute(ToolCall)
+        verifier: object implementing verify() -> VerificationResult
+        model: object implementing decide(prompt) -> Union[ToolCall, ModelCompletion]
+        config: OrchestratorConfig holding step_limit, cost_limit, templates
         """
         self.context = context
-        self.tools = tools
+        self.tool_engine = tool_engine
+        self.verifier = verifier
+        self.model = model
         self.config = config or OrchestratorConfig()
         self.state = State.EXPLORING
         
@@ -81,11 +87,8 @@ class Orchestrator:
             # In a real setup, self.cost would increment based on tool/model usage
             self.cost += 0.05  # Plausible cost estimate for demo until real model is wired
 
-            if self.state == State.EXPLORING:
-                self._explore(issue)
-
-            elif self.state == State.EDITING:
-                self._edit()
+            if self.state in (State.EXPLORING, State.EDITING):
+                self._run_tool_loop(issue)
 
             elif self.state == State.TESTING:
                 self._test()
@@ -102,20 +105,29 @@ class Orchestrator:
 
     # -- state handlers ----------------------------------------------------
 
-    def _explore(self, issue: str):
-        result: ToolResult = self.tools.explore(issue, self.context.get_scratchpad())
-        self.context.update_scratchpad(attempt=f"explore: {result.output[:200]}")
-        # Once exploration finds a target, move to editing.
-        # Real logic: ask the model if it has enough info yet.
-        self.state = State.EDITING
-
-    def _edit(self):
-        result: ToolResult = self.tools.edit(self.context.get_scratchpad())
-        self.context.update_scratchpad(attempt=f"edit: {result.output[:200]}")
-        self.state = State.TESTING
+    def _run_tool_loop(self, issue: str):
+        last_obs = self.context.get_scratchpad().attempt_history[-1] if self.context.get_scratchpad().attempt_history else "No observation yet."
+        hint = self.recovery_manager.last_error_signature if self.state == State.EDITING else None
+        
+        prompt = self.prompt_builder.build_turn_prompt(
+            issue=issue,
+            scratchpad_state=self.context.get_scratchpad(),
+            last_observation=last_obs,
+            recovery_hint=hint
+        )
+        decision = self.model.decide(prompt)
+        
+        if isinstance(decision, ModelCompletion):
+            if self.state == State.EXPLORING:
+                self.state = State.EDITING
+            else:
+                self.state = State.TESTING
+        else:
+            result: ToolResult = self.tool_engine.execute(decision)
+            self.context.update_scratchpad(attempt=f"{self.state.name} tool {decision.tool_name.value} output: {result.output[:200]}")
 
     def _test(self):
-        verification: VerificationResult = self.tools.verify()
+        verification: VerificationResult = self.verifier.verify()
 
         if verification.passed:
             self.state = State.DONE
@@ -163,39 +175,3 @@ class Orchestrator:
 # without needing their code to exist yet.
 # ---------------------------------------------------------------------------
 
-class StubContext:
-    def __init__(self):
-        self._state = ScratchpadState()
-
-    def get_scratchpad(self) -> ScratchpadState:
-        return self._state
-
-    def update_scratchpad(self, hypothesis: str = None, attempt: str = None):
-        if hypothesis:
-            self._state.hypothesis = hypothesis
-        if attempt:
-            self._state.attempt_history.append(attempt)
-
-
-class StubTools:
-    """Simulates: fails once with error A, then succeeds — to test recovery."""
-    def __init__(self):
-        self._call_count = 0
-
-    def explore(self, issue, scratchpad) -> ToolResult:
-        return ToolResult(success=True, output=f"found relevant file for: {issue}")
-
-    def edit(self, scratchpad) -> ToolResult:
-        self._call_count += 1
-        return ToolResult(success=True, output=f"applied edit attempt #{self._call_count}")
-
-    def verify(self) -> VerificationResult:
-        if self._call_count < 2:
-            return VerificationResult(passed=False, failing_tests=["test_discounts.py::test_zero_qty"])
-        return VerificationResult(passed=True)
-
-
-if __name__ == "__main__":
-    orch = Orchestrator(context=StubContext(), tools=StubTools())
-    report = orch.run("calculate_discount() returns wrong values when quantity is 0")
-    print(report)

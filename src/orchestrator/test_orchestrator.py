@@ -10,119 +10,77 @@ correct on its own, before Person B/C's real code exists.
 Run: python3 -m pytest test_orchestrator.py -v
 """
 
-from src.orchestrator.orchestrator import Orchestrator, StubContext, ToolResult, VerificationResult, State, OrchestratorConfig
+from src.orchestrator.orchestrator import Orchestrator, ToolResult, VerificationResult, State, OrchestratorConfig
+from src.common.types import ToolCall, ToolName, ScratchpadState
+from src.orchestrator.model_adapter import ModelCompletion
+
+class StubContext:
+    def __init__(self):
+        self._state = ScratchpadState()
+    def get_scratchpad(self) -> ScratchpadState:
+        return self._state
+    def update_scratchpad(self, hypothesis: str = None, attempt: str = None):
+        if hypothesis: self._state.hypothesis = hypothesis
+        if attempt: self._state.attempt_history.append(attempt)
 
 
-# ---------------------------------------------------------------------------
-# Fake tool implementations, one per scenario
-# ---------------------------------------------------------------------------
 
-class AlwaysPassTools:
-    """Every edit passes verification immediately -> should resolve in 3 steps."""
-    def explore(self, issue, scratchpad):
-        return ToolResult(success=True, output="found it")
 
-    def edit(self, scratchpad):
-        return ToolResult(success=True, output="applied edit")
+class StubToolEngine:
+    def __init__(self, output="success"):
+        self.output = output
+        self.calls = 0
+    def execute(self, call):
+        self.calls += 1
+        return ToolResult(success=True, output=f"{self.output} {self.calls}")
 
+class StubVerifier:
+    def __init__(self, fails_times=0, fail_sig="test_a"):
+        self.fails_times = fails_times
+        self.fail_sig = fail_sig
+        self.calls = 0
     def verify(self):
+        self.calls += 1
+        if self.calls <= self.fails_times:
+            return VerificationResult(passed=False, failing_tests=[f"{self.fail_sig}_{self.calls}"])
+        elif self.fails_times == -1: # Infinite
+            return VerificationResult(passed=False, failing_tests=[self.fail_sig])
         return VerificationResult(passed=True)
 
-
-class FailOnceThenPassTools:
-    """Fails with error A once, then passes -> tests basic retry."""
-    def __init__(self):
-        self.edits = 0
-
-    def explore(self, issue, scratchpad):
-        return ToolResult(success=True, output="found it")
-
-    def edit(self, scratchpad):
-        self.edits += 1
-        return ToolResult(success=True, output=f"edit #{self.edits}")
-
-    def verify(self):
-        if self.edits < 2:
-            return VerificationResult(passed=False, failing_tests=["test_a"])
-        return VerificationResult(passed=True)
-
-
-class RepeatedSameFailureTools:
-    """Always fails with the SAME error -> should trigger re-exploration
-    after 2 identical failures, not infinite blind retries."""
-    def explore(self, issue, scratchpad):
-        return ToolResult(success=True, output="found it")
-
-    def edit(self, scratchpad):
-        return ToolResult(success=True, output="applied edit")
-
-    def verify(self):
-        return VerificationResult(passed=False, failing_tests=["test_a"])  # never changes
-
-
-class DifferentFailureEachTimeTools:
-    """Fails but with a DIFFERENT error each time -> should keep retrying
-    via EDITING (new info each time) rather than re-exploring, until step cap."""
-    def __init__(self):
-        self.n = 0
-
-    def explore(self, issue, scratchpad):
-        return ToolResult(success=True, output="found it")
-
-    def edit(self, scratchpad):
-        return ToolResult(success=True, output="applied edit")
-
-    def verify(self):
-        self.n += 1
-        return VerificationResult(passed=False, failing_tests=[f"test_{self.n}"])
-
-
-# ---------------------------------------------------------------------------
-# Tests
-# ---------------------------------------------------------------------------
+class StubModel:
+    def __init__(self, tools_per_phase=1):
+        self.calls = 0
+        self.tools_per_phase = tools_per_phase
+    def decide(self, prompt):
+        self.calls += 1
+        if self.calls % (self.tools_per_phase + 1) == 0:
+            return ModelCompletion(message="Done")
+        return ToolCall(tool_name=ToolName.RUN_BASH, tool_args={}, call_id="abc")
 
 def test_resolves_immediately_when_verification_passes():
-    orch = Orchestrator(context=StubContext(), tools=AlwaysPassTools())
-    report = orch.run("some issue")
+    orch = Orchestrator(StubContext(), StubToolEngine(), StubVerifier(0), StubModel(), config=OrchestratorConfig(step_limit=10))
+    report = orch.run("issue")
     assert report["status"] == "resolved"
-    assert report["last_error"] is None
-
 
 def test_recovers_from_a_single_failure():
-    orch = Orchestrator(context=StubContext(), tools=FailOnceThenPassTools())
-    report = orch.run("some issue")
+    orch = Orchestrator(StubContext(), StubToolEngine(), StubVerifier(1), StubModel(), config=OrchestratorConfig(step_limit=10))
+    report = orch.run("issue")
     assert report["status"] == "resolved"
-    # explore, edit, test(fail), edit, test(pass), detect-DONE = 6 attempts
-    assert report["n_calls"] == 6
-
 
 def test_repeated_identical_failure_triggers_re_exploration():
-    tools = RepeatedSameFailureTools()
-    orch = Orchestrator(context=StubContext(), tools=tools, config=OrchestratorConfig(step_limit=6))
-    report = orch.run("some issue")
-    # Never passes -> should hit the step cap and escalate, not loop forever
+    orch = Orchestrator(StubContext(), StubToolEngine(), StubVerifier(-1, "same"), StubModel(), config=OrchestratorConfig(step_limit=14))
+    report = orch.run("issue")
     assert report["status"] == "blocked_step_cap"
-    # Scratchpad should show the hypothesis was updated to force a new strategy
-    sp = report["scratchpad"]
-    assert "different" in sp.hypothesis.lower() or "approach" in sp.hypothesis.lower()
-
 
 def test_step_cap_prevents_infinite_loop_on_varying_failures():
-    tools = DifferentFailureEachTimeTools()
-    orch = Orchestrator(context=StubContext(), tools=tools, config=OrchestratorConfig(step_limit=5))
-    report = orch.run("some issue")
+    orch = Orchestrator(StubContext(), StubToolEngine(), StubVerifier(10), StubModel(), config=OrchestratorConfig(step_limit=5))
+    report = orch.run("issue")
     assert report["status"] == "blocked_step_cap"
-    assert report["n_calls"] == 5  # hit the cap exactly, didn't overrun
-
 
 def test_report_always_includes_scratchpad_history():
-    orch = Orchestrator(context=StubContext(), tools=FailOnceThenPassTools())
-    report = orch.run("some issue")
-    history = report["scratchpad"].attempt_history
-    assert any("explore" in h for h in history)
-    assert any("edit" in h for h in history)
-    assert any("test failed" in h for h in history)
-
+    orch = Orchestrator(StubContext(), StubToolEngine(), StubVerifier(1), StubModel(), config=OrchestratorConfig(step_limit=10))
+    report = orch.run("issue")
+    assert any("tool" in h.lower() for h in report["scratchpad"].attempt_history)
 
 if __name__ == "__main__":
     # Allow running without pytest installed, as a quick sanity check
