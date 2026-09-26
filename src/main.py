@@ -7,6 +7,7 @@ from src.context.scanner import RepositoryScanner
 from src.memory.manager import MemoryManager
 from src.memory.models import Observation
 from src.common.types import TaskSpec
+from src.orchestrator.model_adapter import ModelAdapter
 from src.orchestrator.orchestrator import Orchestrator, OrchestratorConfig
 from src.verification.verifier import VerificationEngine
 from src.tools.registry import ToolEngine
@@ -22,6 +23,7 @@ def main():
     parser.add_argument("--repo", type=str, help="GitHub repository to authenticate and clone (e.g. owner/name)")
     parser.add_argument("--github-token", type=str, default=os.environ.get("GITHUB_TOKEN", ""), help="GitHub token for auth")
     parser.add_argument("--require-auth", action="store_true", help="Require authorization via --repo")
+    parser.add_argument("--mock", action="store_true", help="Run with a mocked ModelAdapter")
 
     args = parser.parse_args()
 
@@ -80,21 +82,26 @@ def main():
     
     config = OrchestratorConfig(step_limit=args.max_attempts)
     tool_engine = ToolEngine(workspace_dir=args.workspace)
+    
+    if args.mock:
+        import json
+        mock_responses = [
+            json.dumps({"tool_name": "run_bash", "tool_args": {"command": "echo 'print(\"hello world\")' > script.py"}}),
+            json.dumps({"action": "complete", "message": "I have fixed the issue by updating script.py."})
+        ]
+        adapter = ModelAdapter(mock_mode=True, mock_responses=mock_responses)
+    else:
+        adapter = ModelAdapter()
+        
     orchestrator = Orchestrator(
+        model_adapter=adapter,
         config=config,
         tool_engine=tool_engine,
     )
     
 
     print(f"Starting orchestration for issue: {args.issue}")
-    if auth_result:
-        orchestrator.memory_manager.record_observation(
-            Observation(
-                type="auth",
-                source="github_auth",
-                summary=f"Authorized {auth_result.owner}/{auth_result.name} at {auth_result.authorized_at}"
-            )
-        )
+
 
     report = orchestrator.run(task_spec)
 
@@ -103,6 +110,14 @@ def main():
     print(f"Attempts: {report.get('n_calls', 0)}")
     print(f"Cost: ${report.get('cost', 0.0):.2f}")
     print(f"Verified: {report.get('verified', False)}")
+    if auth_result:
+        report["auth"] = {
+            "owner": auth_result.owner,
+            "name": auth_result.name,
+            "authorized_at": auth_result.authorized_at
+        }
+        print(f"Auth Evidence: {auth_result.owner}/{auth_result.name}")
+
     if report.get("last_error"):
         print(f"Last Error: {report['last_error']}")
 
