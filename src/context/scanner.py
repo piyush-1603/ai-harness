@@ -3,11 +3,36 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import Enum
 import fnmatch
 import json
 import os
 from pathlib import Path
 from typing import Any, Optional, Union
+
+
+# ---------------------------------------------------------------------------
+# File Roles
+# ---------------------------------------------------------------------------
+
+class FileRole(str, Enum):
+    """
+    Deterministic primary role classification for a repository file.
+    Each file has exactly one primary role.
+    """
+    SOURCE = "SOURCE"
+    TEST = "TEST"
+    CONFIG = "CONFIG"
+    DOCUMENTATION = "DOCUMENTATION"
+    OTHER = "OTHER"
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, str):
+            return self.value.upper() == other.upper()
+        return super().__eq__(other)
+
+    def __hash__(self) -> int:
+        return hash(self.value.upper())
 
 
 # ---------------------------------------------------------------------------
@@ -217,32 +242,152 @@ EXTENSION_TO_LANGUAGE: dict[str, str] = {
     ".sql": "SQL",
 }
 
-IMPORTANT_FILE_NAMES: set[str] = {
+DOC_EXTENSIONS: set[str] = {
+    ".md",
+    ".markdown",
+    ".rst",
+    ".adoc",
+    ".asciidoc",
+}
+
+DOC_DIR_NAMES: set[str] = {
+    "doc",
+    "docs",
+    "documentation",
+}
+
+DOC_FILE_PREFIXES: tuple[str, ...] = (
+    "readme",
+    "prd",
+    "license",
+    "licence",
+    "contributing",
+    "changelog",
+    "history",
+    "roadmap",
+    "code_of_conduct",
+    "authors",
+    "architecture",
+)
+
+CONFIG_FILENAMES: set[str] = {
     "package.json",
+    "package-lock.json",
+    "pnpm-lock.yaml",
+    "yarn.lock",
     "pyproject.toml",
-    "requirements.txt",
     "setup.py",
     "setup.cfg",
     "pipfile",
+    "pipfile.lock",
+    "poetry.lock",
     "cargo.toml",
+    "cargo.lock",
     "go.mod",
+    "go.sum",
     "pom.xml",
     "build.gradle",
-    "dockerfile",
-    "docker-compose.yml",
-    "docker-compose.yaml",
+    "build.gradle.kts",
+    "settings.gradle",
     "tsconfig.json",
     "jsconfig.json",
     "makefile",
     "cmakelists.txt",
     "pytest.ini",
     "tox.ini",
-    "jest.config.js",
-    "jest.config.ts",
-    "vitest.config.ts",
-    "vitest.config.js",
-    ".coveragerc",
     "conftest.py",
+    ".coveragerc",
+    ".gitignore",
+    ".gitattributes",
+    ".editorconfig",
+    ".env.example",
+    ".env.template",
+}
+
+CONFIG_PATTERNS: list[str] = [
+    "requirements*.txt",
+    "dockerfile*",
+    "docker-compose*.yml",
+    "docker-compose*.yaml",
+    "compose*.yml",
+    "compose*.yaml",
+    "jest.config.*",
+    "vitest.config.*",
+    "webpack.config.*",
+    "vite.config.*",
+    "rollup.config.*",
+    "babel.config.*",
+    ".eslintrc*",
+    ".prettierrc*",
+    "*.ini",
+    "*.cfg",
+]
+
+TEST_FILE_PATTERNS: list[str] = [
+    "test_*.py",
+    "*_test.py",
+    "*.test.js",
+    "*.test.jsx",
+    "*.test.mjs",
+    "*.test.cjs",
+    "*.test.ts",
+    "*.test.tsx",
+    "*.spec.js",
+    "*.spec.jsx",
+    "*.spec.mjs",
+    "*.spec.cjs",
+    "*.spec.ts",
+    "*.spec.tsx",
+    "*_test.go",
+    "*test.java",
+    "*tests.java",
+    "*testcase.java",
+    "*test.kt",
+    "*tests.kt",
+    "*test.scala",
+    "*tests.scala",
+    "*test.cs",
+    "*tests.cs",
+    "*_test.cpp",
+    "*_test.cc",
+]
+
+SOURCE_CODE_EXTENSIONS: set[str] = {
+    ".py",
+    ".pyi",
+    ".js",
+    ".jsx",
+    ".mjs",
+    ".cjs",
+    ".ts",
+    ".tsx",
+    ".go",
+    ".rs",
+    ".java",
+    ".c",
+    ".h",
+    ".cpp",
+    ".hpp",
+    ".cc",
+    ".cxx",
+    ".cs",
+    ".php",
+    ".rb",
+    ".swift",
+    ".kt",
+    ".scala",
+    ".sh",
+    ".bash",
+    ".zsh",
+    ".html",
+    ".htm",
+    ".css",
+    ".scss",
+    ".sass",
+    ".less",
+    ".sql",
+    ".graphql",
+    ".gql",
 }
 
 TEST_DIR_NAMES: set[str] = {
@@ -282,7 +427,8 @@ def is_binary_file(
         return True
     if ext in KNOWN_TEXT_EXTENSIONS:
         return False
-    if file_path.name.lower() in IMPORTANT_FILE_NAMES:
+    name_lower = file_path.name.lower()
+    if name_lower in CONFIG_FILENAMES or name_lower.startswith("readme") or name_lower.startswith("license"):
         return False
 
     try:
@@ -301,40 +447,59 @@ def is_binary_file(
         return True
 
 
-def is_important_file(filename: str) -> bool:
-    """Check if filename matches common important root/configuration files."""
-    name_lower = filename.lower()
-    if name_lower in IMPORTANT_FILE_NAMES:
+def is_config_file(rel_path_or_name: str) -> bool:
+    """Check if file matches common project configuration files."""
+    name_lower = Path(rel_path_or_name).name.lower()
+    if name_lower in CONFIG_FILENAMES:
+        return True
+    return any(fnmatch.fnmatch(name_lower, pat) for pat in CONFIG_PATTERNS)
+
+
+def is_documentation_file(rel_path: str) -> bool:
+    """
+    Check if a relative path corresponds to a documentation file.
+    Based on extension, directory, or documentation filename conventions.
+    """
+    path = Path(rel_path)
+    ext = path.suffix.lower()
+    if ext in DOC_EXTENSIONS:
+        return True
+
+    # Inside a docs/ directory
+    for part in path.parts[:-1]:
+        if part.lower() in DOC_DIR_NAMES:
+            return True
+
+    name_lower = path.name.lower()
+    if any(name_lower.startswith(prefix) for prefix in DOC_FILE_PREFIXES):
+        return True
+
+    return False
+
+
+def is_important_file(rel_path_or_name: str) -> bool:
+    """
+    Check if filename matches common important root/configuration files.
+    Preserves backward compatibility for important_files collection.
+    """
+    name_lower = Path(rel_path_or_name).name.lower()
+    if is_config_file(name_lower):
         return True
     if name_lower.startswith("readme"):
         return True
-    if name_lower.startswith("license"):
-        return True
-    if fnmatch.fnmatch(name_lower, "dockerfile*"):
-        return True
-    if fnmatch.fnmatch(name_lower, "requirements*.txt"):
+    if name_lower.startswith("license") or name_lower.startswith("licence"):
         return True
     return False
 
 
 def is_test_file(rel_path: str) -> bool:
-    """Determine if a relative path points to a likely test file."""
-    parts = Path(rel_path).parts
-    # Check if in a test directory
-    for part in parts[:-1]:
-        if part.lower() in TEST_DIR_NAMES:
-            return True
-
-    filename = parts[-1].lower()
-    if filename.startswith("test_") or filename.endswith("_test.py") or filename == "conftest.py":
-        return True
-    if fnmatch.fnmatch(filename, "*.test.*") or fnmatch.fnmatch(filename, "*.spec.*"):
-        return True
-    if filename.endswith("_test.go"):
-        return True
-    if fnmatch.fnmatch(filename, "*test.java") or fnmatch.fnmatch(filename, "*tests.java"):
-        return True
-    return False
+    """
+    Determine if a relative path points to a likely test file.
+    Only returns True if the filename matches deterministic test naming conventions.
+    Files merely residing inside a test directory (e.g. __init__.py) do not match.
+    """
+    filename = Path(rel_path).name.lower()
+    return any(fnmatch.fnmatch(filename, pat) for pat in TEST_FILE_PATTERNS)
 
 
 def is_test_directory(rel_path: str) -> bool:
@@ -349,6 +514,35 @@ def is_source_directory(rel_path: str) -> bool:
     if is_test_directory(rel_path):
         return False
     return any(p.lower() in SOURCE_DIR_NAMES for p in parts)
+
+
+def classify_file_role(rel_path: str) -> FileRole:
+    """
+    Deterministically classify a discovered file into exactly one FileRole.
+    Classification is based on path, filename, and extension only.
+    """
+    # 1. Explicit test file naming conventions
+    if is_test_file(rel_path):
+        return FileRole.TEST
+
+    # 2. Documentation files (e.g. README.md, PRD.md, docs/*.md)
+    if is_documentation_file(rel_path):
+        return FileRole.DOCUMENTATION
+
+    # 3. Project configuration & build manifests
+    if is_config_file(rel_path):
+        return FileRole.CONFIG
+
+    # 4. Files inside test directories that are not test cases (e.g. __init__.py, helpers)
+    if is_test_directory(rel_path):
+        return FileRole.OTHER
+
+    # 5. Source code files
+    ext = Path(rel_path).suffix.lower()
+    if ext in SOURCE_CODE_EXTENSIONS:
+        return FileRole.SOURCE
+
+    return FileRole.OTHER
 
 
 # ---------------------------------------------------------------------------
@@ -403,6 +597,8 @@ class RepositoryIndex:
     test_directories: list[str] = field(default_factory=list)
     source_files: list[str] = field(default_factory=list)
     source_directories: list[str] = field(default_factory=list)
+    documentation_files: list[str] = field(default_factory=list)
+    file_roles: dict[str, str] = field(default_factory=dict)
 
     # -------------------------------------------------------------------------
     # Convenience Property Aliases
@@ -418,7 +614,11 @@ class RepositoryIndex:
 
     @property
     def config_files(self) -> list[str]:
-        return self.important_files
+        return [f for f in self.discovered_files if self.file_roles.get(f) == FileRole.CONFIG]
+
+    @property
+    def other_files(self) -> list[str]:
+        return [f for f in self.discovered_files if self.file_roles.get(f) == FileRole.OTHER]
 
     @property
     def languages(self) -> dict[str, int]:
@@ -427,6 +627,13 @@ class RepositoryIndex:
     @property
     def extensions(self) -> dict[str, int]:
         return self.detected_extensions
+
+    def get_file_role(self, rel_path: str) -> FileRole:
+        """Get the primary FileRole for a relative path."""
+        val = self.file_roles.get(rel_path)
+        if val:
+            return FileRole(val)
+        return classify_file_role(rel_path)
 
     # -------------------------------------------------------------------------
     # Serialization
@@ -446,6 +653,8 @@ class RepositoryIndex:
             "test_directories": list(self.test_directories),
             "source_files": list(self.source_files),
             "source_directories": list(self.source_directories),
+            "documentation_files": list(self.documentation_files),
+            "file_roles": dict(self.file_roles),
         }
 
     def to_json(self, indent: int = 2) -> str:
@@ -467,6 +676,8 @@ class RepositoryIndex:
             test_directories=list(data.get("test_directories", [])),
             source_files=list(data.get("source_files", [])),
             source_directories=list(data.get("source_directories", [])),
+            documentation_files=list(data.get("documentation_files", [])),
+            file_roles=dict(data.get("file_roles", {})),
         )
 
     # -------------------------------------------------------------------------
@@ -476,6 +687,7 @@ class RepositoryIndex:
     def render_text(self, max_sample_files: int = 15) -> str:
         """
         Produce a compact, deterministic text overview of the repository.
+        Keeps source, test, documentation, and config output clearly separated.
         """
         sections: list[str] = []
 
@@ -502,14 +714,25 @@ class RepositoryIndex:
         else:
             sections.append("## DETECTED LANGUAGES\n(None)")
 
-        # 3. Important / Configuration Files
-        if self.important_files:
-            cfg_lines = [f"- {f}" for f in sorted(self.important_files)]
+        # 3. Important / Configuration Files (excluding documentation files)
+        config_items = [
+            f for f in self.important_files
+            if f not in self.documentation_files
+        ]
+        if config_items:
+            cfg_lines = [f"- {f}" for f in sorted(config_items)]
             sections.append("## IMPORTANT & CONFIGURATION FILES\n" + "\n".join(cfg_lines))
         else:
             sections.append("## IMPORTANT & CONFIGURATION FILES\n(None)")
 
-        # 4. Source Structure
+        # 4. Documentation
+        if self.documentation_files:
+            doc_lines = [f"- {f}" for f in sorted(self.documentation_files)]
+            sections.append("## DOCUMENTATION\n" + "\n".join(doc_lines))
+        else:
+            sections.append("## DOCUMENTATION\n(None)")
+
+        # 5. Source Structure
         src_lines: list[str] = []
         if self.source_directories:
             src_lines.append(f"Source Directories: {', '.join(sorted(self.source_directories))}")
@@ -525,7 +748,7 @@ class RepositoryIndex:
         else:
             sections.append("## SOURCE CODE\n(None)")
 
-        # 5. Test Suite
+        # 6. Test Suite
         test_lines: list[str] = []
         if self.test_directories:
             test_lines.append(f"Test Directories: {', '.join(sorted(self.test_directories))}")
@@ -558,7 +781,7 @@ class RepositoryIndex:
 class RepositoryScanner:
     """
     Recursively scans a repository filesystem and produces a structured RepositoryIndex.
-    Guarantees deterministic ordering and strict filtering.
+    Guarantees deterministic ordering, strict filtering, and explicit file-role classification.
     """
 
     def __init__(self, config: Optional[ScannerConfig] = None) -> None:
@@ -589,6 +812,8 @@ class RepositoryScanner:
         test_directories: list[str] = []
         source_files: list[str] = []
         source_directories: list[str] = []
+        documentation_files: list[str] = []
+        file_roles: dict[str, str] = {}
 
         # Recursively traverse directory tree deterministically
         for dirpath, dirnames, filenames in os.walk(str(root_path)):
@@ -660,17 +885,20 @@ class RepositoryScanner:
                 elif filename.lower() == "makefile":
                     detected_languages["Makefile"] = detected_languages.get("Makefile", 0) + 1
 
-                # Important file detection
+                # Important file detection (root config / manifests / docs)
                 if is_important_file(filename):
                     important_files.append(rel_file)
 
-                # Test file vs Source file classification
-                if is_test_file(rel_file):
+                # Explicit deterministic file-role classification
+                role = classify_file_role(rel_file)
+                file_roles[rel_file] = role.value
+
+                if role == FileRole.TEST:
                     test_files.append(rel_file)
-                else:
-                    # Check if file has a code extension or is a known source file
-                    if ext in EXTENSION_TO_LANGUAGE or filename.lower() in {"dockerfile", "makefile"}:
-                        source_files.append(rel_file)
+                elif role == FileRole.DOCUMENTATION:
+                    documentation_files.append(rel_file)
+                elif role == FileRole.SOURCE:
+                    source_files.append(rel_file)
 
             if len(discovered_files) >= cfg.max_scanned_files:
                 break
@@ -683,6 +911,7 @@ class RepositoryScanner:
         test_directories.sort()
         source_files.sort()
         source_directories.sort()
+        documentation_files.sort()
 
         return RepositoryIndex(
             root_dir=str(root_path),
@@ -696,4 +925,6 @@ class RepositoryScanner:
             test_directories=test_directories,
             source_files=source_files,
             source_directories=source_directories,
+            documentation_files=documentation_files,
+            file_roles=dict(sorted(file_roles.items())),
         )
