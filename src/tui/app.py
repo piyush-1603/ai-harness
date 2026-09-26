@@ -34,8 +34,8 @@ class HarnessTUI(App):
 
     def on_mount(self) -> None:
         self.install_screen(OverviewScreen(self.provider), "overview")
-        self.install_screen(ContextScreen(), "context")
-        self.install_screen(MemoryScreen(), "memory")
+        self.install_screen(ContextScreen(self.provider), "context")
+        self.install_screen(MemoryScreen(self.provider), "memory")
         self.install_screen(RepositoryScreen(), "repository")
         self.install_screen(EventsScreen(), "events")
 
