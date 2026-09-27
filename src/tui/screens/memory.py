@@ -79,7 +79,12 @@ class MemoryScreen(Screen):
 
             if not items:
                 yield Static("No memory items\n", classes="muted")
-                yield NavigationWidget(active_screen="Memory", provider=self.provider)
+                yield NavigationWidget(
+            active_screen="Memory",
+            provider=self.provider,
+            interactive=getattr(self.app, "interactive", False),
+            busy=getattr(self.app, "busy", False),
+        )
                 return
 
             with Horizontal():
@@ -144,7 +149,12 @@ class MemoryScreen(Screen):
                                 for line in preview_lines:
                                     yield Static(line[:74], classes="muted")
 
-        yield NavigationWidget(active_screen="Memory", provider=self.provider)
+        yield NavigationWidget(
+            active_screen="Memory",
+            provider=self.provider,
+            interactive=getattr(self.app, "interactive", False),
+            busy=getattr(self.app, "busy", False),
+        )
 
     def _compose_demo(self) -> ComposeResult:
         with Vertical(id="main-content"):
@@ -167,4 +177,9 @@ class MemoryScreen(Screen):
                     yield Static("[#52b788]stored[/]\n")
                     yield Static("Preview", classes="header")
                     yield Static("FAILED test_expired_token\nTokenExpiredError...\n", classes="muted")
-        yield NavigationWidget(active_screen="Memory", provider=self.provider)
+        yield NavigationWidget(
+            active_screen="Memory",
+            provider=self.provider,
+            interactive=getattr(self.app, "interactive", False),
+            busy=getattr(self.app, "busy", False),
+        )

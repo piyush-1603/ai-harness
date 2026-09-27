@@ -53,7 +53,12 @@ class EventsScreen(Screen):
 
             if not events:
                 yield Static("No events recorded\n", classes="muted")
-                yield NavigationWidget(active_screen="Events", provider=self.provider)
+                yield NavigationWidget(
+            active_screen="Events",
+            provider=self.provider,
+            interactive=getattr(self.app, "interactive", False),
+            busy=getattr(self.app, "busy", False),
+        )
                 return
 
             log = RichLog(highlight=False, markup=True)
@@ -68,7 +73,12 @@ class EventsScreen(Screen):
                 )
             yield log
 
-        yield NavigationWidget(active_screen="Events", provider=self.provider)
+        yield NavigationWidget(
+            active_screen="Events",
+            provider=self.provider,
+            interactive=getattr(self.app, "interactive", False),
+            busy=getattr(self.app, "busy", False),
+        )
 
     def _compose_demo(self) -> ComposeResult:
         with Vertical(id="main-content"):
@@ -82,4 +92,9 @@ class EventsScreen(Screen):
             log.write("[#6c757d]03:40:16[/]  [#e63946]failure_recorded    [/] [#6c757d]TokenExpiredError ×3[/]")
             log.write("[#6c757d]03:40:16[/]  [#4ea8de]phase_changed       [/] [#6c757d]RECOVER[/]")
             yield log
-        yield NavigationWidget(active_screen="Events", provider=self.provider)
+        yield NavigationWidget(
+            active_screen="Events",
+            provider=self.provider,
+            interactive=getattr(self.app, "interactive", False),
+            busy=getattr(self.app, "busy", False),
+        )

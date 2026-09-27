@@ -194,7 +194,12 @@ class ContextScreen(Screen):
                 with Vertical(classes="detail-pane"):
                     yield Static("", id="candidate-detail")
 
-        yield NavigationWidget(active_screen="Context", provider=self.provider)
+        yield NavigationWidget(
+            active_screen="Context",
+            provider=self.provider,
+            interactive=getattr(self.app, "interactive", False),
+            busy=getattr(self.app, "busy", False),
+        )
 
     def _compose_demo(self) -> ComposeResult:
         with Vertical(id="main-content"):
@@ -215,4 +220,9 @@ class ContextScreen(Screen):
                     yield Static("[#52b788]selected_within_budget[/]\n")
                     yield Static("Estimated tokens", classes="header")
                     yield Static("41\n")
-        yield NavigationWidget(active_screen="Context", provider=self.provider)
+        yield NavigationWidget(
+            active_screen="Context",
+            provider=self.provider,
+            interactive=getattr(self.app, "interactive", False),
+            busy=getattr(self.app, "busy", False),
+        )

@@ -95,16 +95,12 @@ def test_invalid_task_exits_cleanly(monkeypatch):
         main()
     assert e.value.code == 1
 
-def test_no_task_argument_behaves_clearly(monkeypatch, capsys):
+def test_no_task_argument_enters_standby(monkeypatch):
     monkeypatch.setattr(sys, "argv", ["app.py"])
 
-    with pytest.raises(SystemExit) as e:
+    with patch.object(HarnessTUI, "run") as mock_run:
         main()
-    assert e.value.code == 1
-
-    out, err = capsys.readouterr()
-    assert "No task selected" in out
-    assert "--task <task-id>" in out
+        mock_run.assert_called_once()
 
 def test_app_bootstrap_does_not_mutate_state(tmp_path):
     import asyncio

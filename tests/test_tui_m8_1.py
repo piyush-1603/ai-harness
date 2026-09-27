@@ -15,6 +15,7 @@ def _run(coro):
 def mock_provider():
     from unittest.mock import MagicMock
     provider = MagicMock(spec=TUIDataProvider)
+    provider.task_id = "demo"
     provider.refresh.return_value = True
     provider.last_refresh_changed = False
     provider.last_refresh_error = None

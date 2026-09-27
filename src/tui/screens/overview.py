@@ -27,7 +27,17 @@ class OverviewScreen(Screen):
         data = self.provider.get_overview_data()
 
         try:
-            self.query_one("#task-status", Static).update(data.status)
+            # In interactive standby, override the status display
+            interactive = getattr(self.app, "interactive", False)
+            busy = getattr(self.app, "busy", False)
+            if interactive and not busy:
+                display_status = "READY"
+            elif interactive and busy:
+                display_status = "RUNNING"
+            else:
+                display_status = data.status
+
+            self.query_one("#task-status", Static).update(display_status)
             self.query_one("#task-title", Static).update(data.task)
 
             subtitle = f"Recovering from {data.active_failure}\n" if data.active_failure else f"Phase: {data.phase}\n"
@@ -110,7 +120,12 @@ class OverviewScreen(Screen):
 
             yield Static("─" * 96, classes="separator")
 
-        yield NavigationWidget(active_screen="Overview", provider=self.provider)
+        yield NavigationWidget(
+            active_screen="Overview",
+            provider=self.provider,
+            interactive=getattr(self.app, "interactive", False),
+            busy=getattr(self.app, "busy", False),
+        )
 
     def compose_demo(self) -> ComposeResult:
         """Original fake data compose logic for --demo."""
