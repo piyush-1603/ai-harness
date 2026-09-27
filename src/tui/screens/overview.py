@@ -16,86 +16,101 @@ class OverviewScreen(Screen):
         super().__init__(**kwargs)
         self.provider = provider
 
-    async def refresh_data(self) -> None:
-        await self.recompose()
+    def on_mount(self) -> None:
+        if self.provider:
+            self.run_worker(self.refresh_data())
 
-    def compose(self) -> ComposeResult:
+    async def refresh_data(self) -> None:
         if not self.provider:
-            yield from self.compose_demo()
             return
 
         data = self.provider.get_overview_data()
 
-        with Vertical(id="main-content"):
-            # Header
-            with Horizontal(classes="title-bar"):
-                yield Static("AI HARNESS", classes="title-bar-left")
-                yield Static(data.status, classes="title-bar-right")
+        try:
+            self.query_one("#task-status", Static).update(data.status)
+            self.query_one("#task-title", Static).update(data.task)
 
-            yield Static(data.task, classes="task-title")
+            subtitle = f"Recovering from {data.active_failure}\n" if data.active_failure else f"Phase: {data.phase}\n"
+            self.query_one("#task-subtitle", Static).update(subtitle)
 
-            if data.active_failure:
-                yield Static(f"Recovering from {data.active_failure}\n", classes="muted")
-            else:
-                yield Static(f"Phase: {data.phase}\n", classes="muted")
-
-            lc = LifecycleWidget()
+            lc = self.query_one(LifecycleWidget)
             lc.active_phase = data.phase
-            yield lc
+            lc.task_status = data.status
+            lc.refresh(layout=True)
 
-            yield Static("─" * 96, classes="separator")
-
-            # Context Summary
-            yield Static("Context", classes="header")
             pressure_color = "#e63946" if data.pressure_level in ("HIGH", "CRITICAL") else "#52b788"
+            ctx_summary = f"[b {pressure_color}]{data.pressure_level}[/] [#6c757d]pressure · {data.repository_scope} scope · {data.context_tokens / 1000:.1f}k / {data.context_limit / 1000:.1f}k tokens[/]\n"
+            self.query_one("#context-summary", Static).update(ctx_summary)
 
-            # Use appropriate context summary presentation
-            yield Static(f"[b {pressure_color}]{data.pressure_level}[/] [#6c757d]pressure · {data.repository_scope} scope · {data.context_tokens / 1000:.1f}k / {data.context_limit / 1000:.1f}k tokens[/]\n")
-
-            # Current Failure
-            yield Static("Current failure", classes="header")
             if data.active_failure:
-                yield Static(f"{data.active_failure:<80}[#e63946]×{data.active_failure_count}[/]\n")
+                fail_summary = f"{data.active_failure:<80}[#e63946]×{data.active_failure_count}[/]\n"
             else:
-                yield Static("No active failure\n", classes="muted")
+                fail_summary = "No active failure\n"
+            self.query_one("#failure-summary", Static).update(fail_summary)
 
-            # Relevant files
-            yield Static("Relevant files", classes="header")
             if data.relevant_files:
+                files_lines = []
                 for f in data.relevant_files:
                     color = "#52b788" if f.status == "touched" else "#4ea8de"
-                    yield Static(f"{f.path:<80}[{color}]{f.status}[/]")
-                yield Static("\n")
+                    files_lines.append(f"{f.path:<80}[{color}]{f.status}[/]")
+                self.query_one("#relevant-files", Static).update("\n".join(files_lines) + "\n")
             else:
-                yield Static("No relevant files\n", classes="muted")
+                self.query_one("#relevant-files", Static).update("No relevant files\n")
 
-            yield Static("─" * 96, classes="separator")
-
-            # Recent Activity
-            yield Static("Recent activity\n", classes="header")
             if data.recent_activity:
-                # timestamp(8) + 2 spaces + label(10) + 1 space = 21 chars overhead
-                # plus 2 spaces for Rich markup spacing
-                DESC_MAX = 96 - 8 - 2 - 10 - 1  # = 75 chars
+                DESC_MAX = 96 - 8 - 2 - 10 - 1
+                act_lines = []
                 for act in data.recent_activity:
                     color = "#4ea8de"
                     if "fail" in act.label.lower() or "error" in act.label.lower():
                         color = "#e63946"
                     elif "recover" in act.label.lower():
                         color = "#ffb703"
-
                     desc = act.description or ""
                     if len(desc) > DESC_MAX:
                         desc = desc[:DESC_MAX - 1] + "…"
-
-                    yield Static(f"[#6c757d]{act.timestamp}[/]  [{color}]{act.label:<10}[/] [#6c757d]{desc}[/]")
-                yield Static("\n")
+                    act_lines.append(f"[#6c757d]{act.timestamp}[/]  [{color}]{act.label:<10}[/] [#6c757d]{desc}[/]")
+                self.query_one("#recent-activity", Static).update("\n".join(act_lines) + "\n")
             else:
-                yield Static("No recent activity\n", classes="muted")
+                self.query_one("#recent-activity", Static).update("No recent activity\n")
+
+            self.query_one(NavigationWidget).refresh(layout=True)
+        except Exception:
+            pass
+
+    def compose(self) -> ComposeResult:
+        if not self.provider:
+            yield from self.compose_demo()
+            return
+
+        with Vertical(id="main-content"):
+            with Horizontal(classes="title-bar"):
+                yield Static("AI HARNESS", classes="title-bar-left")
+                yield Static("", id="task-status", classes="title-bar-right")
+
+            yield Static("", id="task-title", classes="task-title")
+            yield Static("", id="task-subtitle", classes="muted")
+
+            yield LifecycleWidget()
+            yield Static("─" * 96, classes="separator")
+
+            yield Static("Context", classes="header")
+            yield Static("", id="context-summary")
+
+            yield Static("Current failure", classes="header")
+            yield Static("", id="failure-summary", classes="muted")
+
+            yield Static("Relevant files", classes="header")
+            yield Static("", id="relevant-files", classes="muted")
 
             yield Static("─" * 96, classes="separator")
 
-        yield NavigationWidget(active_screen="Overview")
+            yield Static("Recent activity\n", classes="header")
+            yield Static("", id="recent-activity", classes="muted")
+
+            yield Static("─" * 96, classes="separator")
+
+        yield NavigationWidget(active_screen="Overview", provider=self.provider)
 
     def compose_demo(self) -> ComposeResult:
         """Original fake data compose logic for --demo."""

@@ -23,6 +23,18 @@ def _kind_color(kind: str) -> str:
 class MemoryScreen(Screen):
     """Memory screen wired to TUIDataProvider."""
 
+    BINDINGS = [
+        ("up", "move_up", "Up"),
+        ("down", "move_down", "Down"),
+        ("0", "filter_all", "All"),
+        ("o", "filter_observations", "Obs"),
+        ("a", "filter_attempts", "Att"),
+        ("f", "filter_failures", "Fail"),
+        ("d", "filter_discoveries", "Disc"),
+        ("t", "filter_artifacts", "Art"),
+    ]
+
+    _filter: str = "All"
     _selected_idx: int = 0
 
     def __init__(self, provider: Optional[TUIDataProvider] = None, **kwargs):
@@ -67,7 +79,7 @@ class MemoryScreen(Screen):
 
             if not items:
                 yield Static("No memory items\n", classes="muted")
-                yield NavigationWidget(active_screen="Memory")
+                yield NavigationWidget(active_screen="Memory", provider=self.provider)
                 return
 
             with Horizontal():
@@ -132,7 +144,7 @@ class MemoryScreen(Screen):
                                 for line in preview_lines:
                                     yield Static(line[:74], classes="muted")
 
-        yield NavigationWidget(active_screen="Memory")
+        yield NavigationWidget(active_screen="Memory", provider=self.provider)
 
     def _compose_demo(self) -> ComposeResult:
         with Vertical(id="main-content"):
@@ -155,4 +167,4 @@ class MemoryScreen(Screen):
                     yield Static("[#52b788]stored[/]\n")
                     yield Static("Preview", classes="header")
                     yield Static("FAILED test_expired_token\nTokenExpiredError...\n", classes="muted")
-        yield NavigationWidget(active_screen="Memory")
+        yield NavigationWidget(active_screen="Memory", provider=self.provider)

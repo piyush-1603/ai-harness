@@ -73,7 +73,7 @@ LifecycleWidget {
 /* Navigation Widget */
 NavigationWidget {
     dock: bottom;
-    height: 1;
+    height: 2;
     color: #6c757d;
 }
 
@@ -158,4 +158,18 @@ EventsScreen {
 RichLog {
     background: #0f0f0f;
     color: #e0e0e0;
+}
+
+/* Modal and Help */
+HelpScreen {
+    align: center middle;
+    background: #000000 70%;
+}
+
+.help-dialog {
+    width: 40;
+    height: auto;
+    background: #1e1e1e;
+    border: solid #2c2c2c;
+    padding: 1 2;
 }

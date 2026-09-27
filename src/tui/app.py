@@ -7,6 +7,32 @@ from src.tui.screens.overview import OverviewScreen
 from src.tui.screens.context import ContextScreen
 from src.tui.screens.memory import MemoryScreen
 from src.tui.screens.repository import RepositoryScreen
+from textual.screen import ModalScreen
+from textual.widgets import Static
+from textual.containers import Vertical
+
+class HelpScreen(ModalScreen):
+    """A small help overlay/modal."""
+
+    BINDINGS = [
+        ("escape", "dismiss", "Dismiss"),
+        ("?", "dismiss", "Dismiss"),
+    ]
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="help-dialog", classes="help-dialog"):
+            yield Static("Navigation", classes="header")
+            yield Static("1 Overview   2 Context   3 Memory\n4 Repository 5 Events", classes="muted")
+
+            yield Static("\nControls", classes="header")
+            yield Static("↑ ↓ Navigate   Enter Inspect\nr Refresh      ? Help\nq Quit", classes="muted")
+
+            yield Static("\nContext", classes="header")
+            yield Static("a All   s Selected   x Skipped", classes="muted")
+
+    def action_dismiss(self) -> None:
+        self.app.pop_screen()
+
 from src.tui.screens.events import EventsScreen
 
 from src.memory.manager import MemoryManager
@@ -58,8 +84,12 @@ class HarnessTUI(App):
         """Called every _REFRESH_INTERVAL seconds."""
         if not self.provider:
             return
-        self.provider.refresh()
-        await self._refresh_active_screen()
+        success = self.provider.refresh()
+        if not success:
+            # Keep previous snapshot but update UI for STALE footer
+            await self._refresh_active_screen()
+        elif getattr(self.provider, "last_refresh_changed", True):
+            await self._refresh_active_screen()
 
     async def _refresh_active_screen(self) -> None:
         screen = self.screen
@@ -73,7 +103,7 @@ class HarnessTUI(App):
         await self._refresh_active_screen()
 
     def action_help(self) -> None:
-        pass
+        self.push_screen(HelpScreen())
 
 def main():
     parser = argparse.ArgumentParser(description="AI Harness TUI")

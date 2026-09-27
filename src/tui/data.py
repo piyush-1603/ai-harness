@@ -24,17 +24,27 @@ class TUIDataProvider:
         self.repo = repository_index
         self.task_id = task_id
         self.last_refresh_error: Optional[str] = None
+        self.last_refresh_changed: bool = False
 
     def refresh(self) -> bool:
         """Reload state and events from disk. Returns True if successful."""
         if not self.task_id:
             return False
         try:
+            old_state_dict = self.memory.get_state().to_dict()
+            old_events_dict = [e.to_dict() for e in self.memory.get_events()] if hasattr(self.memory, 'get_events') else []
+
             candidate = MemoryManager(
                 storage=self.memory.storage,
                 artifact_store=self.memory.artifact_store,
             )
             candidate.load(self.task_id)
+
+            new_state_dict = candidate.get_state().to_dict()
+            new_events_dict = [e.to_dict() for e in candidate.get_events()] if hasattr(candidate, 'get_events') else []
+
+            self.last_refresh_changed = (old_state_dict != new_state_dict) or (old_events_dict != new_events_dict)
+
             self.memory = candidate
             self.last_refresh_error = None
             return True
@@ -44,13 +54,13 @@ class TUIDataProvider:
 
     def get_overview_data(self) -> OverviewData:
         state = self.memory.get_state()
-        
+
         pressure_level = "UNKNOWN"
         pressure_score = 0
         repo_scope = "UNKNOWN"
         ctx_tokens = 0
         ctx_limit = 0
-        
+
         if self.diagnostics:
             diag = self.diagnostics.explain(self.memory, repository_index=self.repo)
             if diag:
@@ -62,7 +72,7 @@ class TUIDataProvider:
 
         active_failure = None
         active_failure_count = 0
-        
+
         # Pick the most relevant unresolved failure
         unresolved = [f for f in state.failures if not f.resolved]
         if unresolved:
@@ -70,7 +80,7 @@ class TUIDataProvider:
             best_failure = sorted(unresolved, key=lambda x: (x.occurrence_count, x.first_seen), reverse=True)[0]
             active_failure = best_failure.error_signature
             active_failure_count = best_failure.occurrence_count
-            
+
         relevant_files = []
         seen = set()
         for f in state.touched_files:
@@ -81,7 +91,7 @@ class TUIDataProvider:
             if f not in seen:
                 relevant_files.append(RelevantFileData(path=f, status="relevant"))
                 seen.add(f)
-                
+
         # recent activity
         events = self.memory.get_events()[-10:] if hasattr(self.memory, 'get_events') else []
         activities = []
@@ -117,14 +127,14 @@ class TUIDataProvider:
     def get_context_data(self) -> ContextData:
         if not self.diagnostics:
             return ContextData("UNKNOWN", "UNKNOWN", 0, 0, [], [], [])
-            
+
         diag = self.diagnostics.explain(self.memory, repository_index=self.repo)
         if not diag:
             return ContextData("UNKNOWN", "UNKNOWN", 0, 0, [], [], [])
-            
+
         selected = []
         skipped = []
-        
+
         for c in diag.candidates:
             cd = ContextCandidateData(
                 id=c.id,
@@ -141,7 +151,7 @@ class TUIDataProvider:
                 selected.append(cd)
             else:
                 skipped.append(cd)
-                
+
         return ContextData(
             pressure_level=diag.policy.pressure_level,
             repository_scope=diag.policy.repository_scope,
@@ -154,7 +164,7 @@ class TUIDataProvider:
 
     def get_memory_data(self) -> MemoryData:
         state = self.memory.get_state()
-        
+
         observations = []
         artifacts = []
         for o in state.recent_observations:
@@ -167,7 +177,7 @@ class TUIDataProvider:
                 exists = False
                 if hasattr(self.memory, 'has_artifact'):
                     exists = self.memory.has_artifact(o.output_ref)
-                
+
                 artifacts.append(MemoryItemData(
                     kind="Artifact",
                     label=o.output_ref,
@@ -177,11 +187,11 @@ class TUIDataProvider:
                     preview=o.raw_output,
                     exists=exists
                 ))
-                
+
         attempts = [MemoryItemData("Attempt", a.action, a.result) for a in state.attempts]
         failures = [MemoryItemData("Failure", f.error_signature, f.summary, count=f.occurrence_count) for f in state.failures]
         discoveries = [MemoryItemData("Discovery", "fact", d.statement) for d in state.discoveries]
-        
+
         return MemoryData(
             observations=observations,
             attempts=attempts,
@@ -217,7 +227,7 @@ class TUIDataProvider:
     def get_events_data(self, limit: int = 100) -> list[EventItemData]:
         if not hasattr(self.memory, 'get_events'):
             return []
-            
+
         events = self.memory.get_events()[-limit:]
         return [
             EventItemData(

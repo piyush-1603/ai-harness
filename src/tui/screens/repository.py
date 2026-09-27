@@ -33,7 +33,7 @@ class RepositoryScreen(Screen):
             with Vertical(id="main-content"):
                 yield Static("Repository\n", classes="header")
                 yield Static("Repository index unavailable\n", classes="muted")
-            yield NavigationWidget(active_screen="Repository")
+            yield NavigationWidget(active_screen="Repository", provider=self.provider)
             return
 
         # Group files by top-level directory for tree rendering
@@ -105,7 +105,7 @@ class RepositoryScreen(Screen):
                             if len(selected.imports) > 8:
                                 yield Static(f"  … {len(selected.imports) - 8} more", classes="muted")
 
-        yield NavigationWidget(active_screen="Repository")
+        yield NavigationWidget(active_screen="Repository", provider=self.provider)
 
     def _compose_demo(self) -> ComposeResult:
         with Vertical(id="main-content"):
@@ -130,4 +130,4 @@ class RepositoryScreen(Screen):
                     yield Static("AuthService\nvalidate_token()\nrefresh_token()\n", classes="muted")
                     yield Static("Imports", classes="header")
                     yield Static("src/token.py\nsrc/database.py", classes="muted")
-        yield NavigationWidget(active_screen="Repository")
+        yield NavigationWidget(active_screen="Repository", provider=self.provider)
