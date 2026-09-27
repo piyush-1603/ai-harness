@@ -148,3 +148,89 @@ def test_keyboard_navigation_non_interactive(standby_provider):
             assert type(app.screen).__name__ == "OverviewScreen"
 
     _run(run())
+
+
+@pytest.mark.parametrize(("width", "height"), [(80, 24), (120, 40)])
+def test_visible_prompt_focus_navigation_and_refresh(standby_provider, width, height):
+    async def run():
+        app = HarnessTUI(provider=standby_provider, interactive=True)
+        async with app.run_test(size=(width, height)) as pilot:
+            await pilot.pause()
+            inp = _get_input(app)
+            assert inp.content_region.height >= 1
+            assert inp.region.bottom <= height
+            await pilot.press("q", "2", "question_mark")
+            assert inp.value == "q2?"
+            await pilot.press("escape", "2")
+            assert type(app.screen).__name__ == "ContextScreen"
+            for key in ("3", "4", "5", "1"):
+                await pilot.press("escape", key)
+                await pilot.pause()
+                assert _get_input(app).content_region.height >= 1
+                assert _get_input(app).region.bottom <= height
+            await pilot.press("escape", "5")
+            _get_input(app).focus()
+            await pilot.press("d", "r", "a", "f", "t")
+            await app.action_manual_refresh()
+            await pilot.pause()
+            assert _get_input(app).value == "draft"
+            assert app.focused is _get_input(app)
+            app._set_busy(True)
+            await pilot.press("1")
+            assert _get_input(app).disabled
+            await app._on_task_finished()
+            assert not _get_input(app).disabled
+            await pilot.press("escape", "5")
+            assert not _get_input(app).disabled
+
+    _run(run())
+
+
+def test_worker_repeated_prompts_without_credentials(tmp_path):
+    """Exercise the real worker/orchestrator failure path without API calls or patches."""
+    import os
+    from pathlib import Path
+    import subprocess
+    import sys
+
+    workspace = tmp_path / "external"
+    workspace.mkdir()
+    (workspace / "external_module.py").write_text("value = 1\n")
+    env = dict(os.environ, AI_API_KEY="", PYTHONPATH=str(Path(__file__).resolve().parents[1]))
+    result = subprocess.run(
+        [sys.executable, "-c", "from tests.test_tui_m9 import _check_real_worker; "
+         "import asyncio, sys; asyncio.run(_check_real_worker(sys.argv[1]))", str(workspace)],
+        cwd=tmp_path, env=env, capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+async def _check_real_worker(workspace):
+    from src.context.scanner import RepositoryScanner
+
+    memory = MemoryManager(base_dir=".harness")
+    memory.initialize_task("interactive-standby", "Ready")
+    provider = TUIDataProvider(memory, repository_index=RepositoryScanner().scan(workspace))
+    app = HarnessTUI(provider=provider, interactive=True, live=True, workspace=workspace)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        task_ids = []
+        for prompt in ("Inspect external module", "Inspect it again"):
+            inp = _get_input(app)
+            inp.focus()
+            await pilot.pause()
+            await pilot.press(*prompt, "enter")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            assert not app.busy
+            assert not _get_input(app).disabled
+            assert app.focused is _get_input(app)
+            assert provider.memory.get_state().task == prompt
+            assert any("AI_API_KEY" in e.summary for e in provider.memory.get_events())
+            task_ids.append(provider.task_id)
+        assert len(set(task_ids)) == 2
+        assert "external_module.py" in provider.repo.discovered_files
+        await pilot.press("escape", "4")
+        assert type(app.screen).__name__ == "RepositoryScreen"
+        assert "external_module.py" in [f.path for f in provider.get_repository_data().files]
+        assert "src/tui/app.py" not in provider.repo.discovered_files

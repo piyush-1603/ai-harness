@@ -9,6 +9,7 @@ from textual.screen import ModalScreen
 from textual.widgets import Static, Input
 from textual.containers import Vertical
 from textual import work
+from textual.worker import Worker, WorkerState
 
 from src.tui.screens.overview import OverviewScreen
 from src.tui.screens.context import ContextScreen
@@ -44,7 +45,7 @@ class HelpScreen(ModalScreen):
             yield Static("1 Overview   2 Context   3 Memory\n4 Repository 5 Events", classes="muted")
 
             yield Static("\nControls", classes="header")
-            yield Static("↑ ↓ Navigate   Enter Inspect\nr Refresh      ? Help\nq Quit", classes="muted")
+            yield Static("↑ ↓ Navigate   Enter Inspect\nr Refresh      ? Help\nq Quit\nTab Focus prompt   Esc Leave prompt", classes="muted")
 
             yield Static("\nContext", classes="header")
             yield Static("a All   s Selected   x Skipped", classes="muted")
@@ -108,8 +109,16 @@ class HarnessTUI(App):
 
     async def _refresh_active_screen(self) -> None:
         screen = self.screen
+        inputs = list(screen.query("#prompt-input"))
+        value = inputs[0].value if inputs else ""
+        focused = bool(inputs and self.focused is inputs[0])
         if hasattr(screen, "refresh_data"):
             await screen.refresh_data()
+        for inp in screen.query("#prompt-input"):
+            inp.value = value
+            if focused:
+                inp.focus()
+        self._update_nav_status()
 
     async def action_manual_refresh(self) -> None:
         if self.provider:
@@ -119,8 +128,13 @@ class HarnessTUI(App):
     def action_help(self) -> None:
         self.push_screen(HelpScreen())
 
+    def on_key(self, event) -> None:
+        if event.key == "escape" and isinstance(self.focused, Input):
+            self.set_focus(None)
+            event.stop()
+
     async def on_input_submitted(self, event: Input.Submitted) -> None:
-        if not event.value.strip() or self.busy:
+        if not self.interactive or not event.value.strip() or self.busy:
             return
 
         prompt = event.value.strip()
@@ -131,74 +145,67 @@ class HarnessTUI(App):
     def _set_busy(self, busy: bool) -> None:
         self.busy = busy
         placeholder = "Task is running..." if busy else "› Enter a coding task..."
-        for screen in self.screen_stack:
+        for screen in (self.get_screen(name) for name in ("overview", "context", "memory", "repository", "events")):
             for inp in screen.query("#prompt-input"):
                 inp.disabled = busy
                 inp.placeholder = placeholder
         self._update_nav_status()
 
-    @work(thread=True)
+    @work(thread=True, exit_on_error=False)
     def run_orchestrator(self, prompt: str) -> None:
-        task_id = f"interactive-{uuid.uuid4().hex[:8]}"
-
-        task_spec = TaskSpec(
-            issue_id=task_id,
-            issue_description=prompt,
-            workspace_dir=self.workspace,
-            test_command=os.environ.get("HARNESS_TEST_COMMAND", None)
-        )
-
-        memory = MemoryManager(base_dir=".harness")
-        memory.initialize_task(task_spec.issue_id, task_spec.issue_description)
-
-        # Point UI provider to new memory
-        if self.provider:
-            self.provider.memory = memory
-            self.provider.task_id = task_id
-            self.provider.last_refresh_changed = True
-
-        # Re-scan for new task to be safe
         try:
+            task_id = f"interactive-{uuid.uuid4().hex[:8]}"
+            task_spec = TaskSpec(
+                issue_id=task_id,
+                issue_description=prompt,
+                workspace_dir=self.workspace,
+                test_command=os.environ.get("HARNESS_TEST_COMMAND"),
+            )
+            memory = MemoryManager(base_dir=".harness")
+            memory.initialize_task(task_id, prompt)
             repo_index = RepositoryScanner().scan(self.workspace)
-            if self.provider:
-                self.provider.repo = repo_index
-        except Exception:
-            repo_index = None
+            self.call_from_thread(self._show_task, memory, task_id, repo_index)
 
-        try:
-            ctx_config = ContextConfig()
-            builder = ContextBuilder(repository_index=repo_index, config=ctx_config)
-            context = ContextAdapter(memory=memory, builder=builder)
-
-            tool_engine = ToolEngine(workspace_dir=self.workspace)
-            verifier = VerificationEngine()
-            model_adapter = ModelAdapter()
-            config = OrchestratorConfig(step_limit=30)
-
+            builder = ContextBuilder(repository_index=repo_index, config=ContextConfig())
             orch = Orchestrator(
-                context=context,
-                tool_engine=tool_engine,
-                verifier=verifier,
-                model_adapter=model_adapter,
+                context=ContextAdapter(memory=memory, builder=builder),
+                tool_engine=ToolEngine(workspace_dir=self.workspace),
+                verifier=VerificationEngine(),
+                model_adapter=ModelAdapter(),
                 memory_manager=memory,
                 context_builder=builder,
-                config=config
+                config=OrchestratorConfig(step_limit=30),
             )
-
             orch.run(task_spec)
         finally:
             self.call_from_thread(self._on_task_finished)
 
-    def _on_task_finished(self) -> None:
+    async def _show_task(self, memory, task_id, repo_index) -> None:
+        if self.provider:
+            # Keep the UI reader separate from the worker's mutable task state.
+            reader = MemoryManager(storage=memory.storage, artifact_store=memory.artifact_store)
+            reader.load(task_id)
+            self.provider.memory = reader
+            self.provider.task_id = task_id
+            self.provider.repo = repo_index
+            self.provider.refresh()
+        await self._refresh_active_screen()
+
+    def on_worker_state_changed(self, event: Worker.StateChanged) -> None:
+        if event.worker.name == "run_orchestrator" and event.state == WorkerState.ERROR:
+            self.notify(str(event.worker.error), title="Task failed", severity="error")
+
+    async def _on_task_finished(self) -> None:
         self._set_busy(False)
-        for screen in self.screen_stack:
-            for inp in screen.query("#prompt-input"):
-                inp.focus()
-                break
+        if self.provider:
+            self.provider.refresh()
+        await self._refresh_active_screen()
+        for inp in self.screen.query("#prompt-input"):
+            inp.focus()
 
     def _update_nav_status(self) -> None:
         """Push busy state into NavigationWidget so status line updates in-place."""
-        for screen in self.screen_stack:
+        for screen in (self.get_screen(name) for name in ("overview", "context", "memory", "repository", "events")):
             for nav in screen.query("NavigationWidget"):
                 nav.busy = self.busy
                 nav.update_status()

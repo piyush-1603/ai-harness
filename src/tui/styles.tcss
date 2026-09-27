@@ -78,7 +78,7 @@ NavigationWidget {
 }
 
 #prompt-input {
-    height: 1;
+    height: 3;
     background: #1a1a1a;
     border: none;
     border-top: solid #2c2c2c;
