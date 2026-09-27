@@ -33,7 +33,14 @@ class RecoveryManager:
 
     def analyze_failure(self, failing_tests: list, stderr: str) -> RecoveryAdvice:
         raw_sig = ",".join(sorted(failing_tests)) if failing_tests else stderr[:200]
-        
+        full_evidence = f"{raw_sig} {stderr[:500]}"
+
+        if "429" in full_evidence or "rate limit" in full_evidence.lower() or "RATE_LIMIT" in full_evidence:
+            return RecoveryAdvice(
+                decision=RecoveryDecision.ESCALATE,
+                hint="Provider rate limit exceeded (HTTP 429). Escalating without retry.",
+            )
+
         # Empty signature edge case guard
         if not raw_sig.strip():
             error_signature = f"empty_{hashlib.md5(str(len(self.signature_history)).encode()).hexdigest()}"

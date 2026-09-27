@@ -10,6 +10,8 @@ traj.json
 runs/
 logs/
 eval_results/
+*.zip
+*.tar.gz
 
 # Secrets & Local Environment
 .env
