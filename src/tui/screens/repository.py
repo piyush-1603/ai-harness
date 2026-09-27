@@ -160,7 +160,12 @@ class RepositoryScreen(Screen):
                     yield Static("", id="detail-symbols")
                     yield Static("", id="detail-imports")
 
-        yield NavigationWidget(active_screen="Repository", provider=self.provider)
+        yield NavigationWidget(
+            active_screen="Repository",
+            provider=self.provider,
+            interactive=getattr(self.app, "interactive", False),
+            busy=getattr(self.app, "busy", False),
+        )
 
     def _compose_demo(self) -> ComposeResult:
         with Vertical(id="main-content"):
@@ -185,4 +190,9 @@ class RepositoryScreen(Screen):
                     yield Static("AuthService\nvalidate_token()\nrefresh_token()\n", classes="muted")
                     yield Static("Imports", classes="header")
                     yield Static("src/token.py\nsrc/database.py", classes="muted")
-        yield NavigationWidget(active_screen="Repository", provider=self.provider)
+        yield NavigationWidget(
+            active_screen="Repository",
+            provider=self.provider,
+            interactive=getattr(self.app, "interactive", False),
+            busy=getattr(self.app, "busy", False),
+        )

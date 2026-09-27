@@ -73,8 +73,28 @@ LifecycleWidget {
 /* Navigation Widget */
 NavigationWidget {
     dock: bottom;
-    height: 2;
+    height: auto;
     color: #6c757d;
+}
+
+#prompt-input {
+    height: 1;
+    background: #1a1a1a;
+    border: none;
+    border-top: solid #2c2c2c;
+    padding: 0 1;
+    color: #e0e0e0;
+}
+
+#prompt-input:focus {
+    border: none;
+    border-top: solid #4ea8de;
+    background: #1e1e1e;
+}
+
+#prompt-input:disabled {
+    color: #6c757d;
+    background: #0f0f0f;
 }
 
 .nav-active {

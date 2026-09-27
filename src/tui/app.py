@@ -74,14 +74,16 @@ class HarnessTUI(App):
         self,
         provider: Optional[TUIDataProvider] = None,
         live: bool = False,
+        interactive: bool = False,
         workspace: str = ".",
         **kwargs,
     ):
         super().__init__(**kwargs)
         self.provider = provider
         self.live = live
+        self.interactive = interactive
         self.workspace = workspace
-        self.task_running = False
+        self.busy = False  # True only while orchestrator is executing
 
     def on_mount(self) -> None:
         self.install_screen(OverviewScreen(self.provider), "overview")
@@ -118,39 +120,43 @@ class HarnessTUI(App):
         self.push_screen(HelpScreen())
 
     async def on_input_submitted(self, event: Input.Submitted) -> None:
-        if not event.value.strip():
+        if not event.value.strip() or self.busy:
             return
-        if self.task_running:
-            return
-            
+
         prompt = event.value.strip()
         event.input.value = ""
-        event.input.disabled = True
-        event.input.placeholder = "Task is running..."
-        self.task_running = True
-        
+        self._set_busy(True)
         self.run_orchestrator(prompt)
+
+    def _set_busy(self, busy: bool) -> None:
+        self.busy = busy
+        placeholder = "Task is running..." if busy else "› Enter a coding task..."
+        for screen in self.screen_stack:
+            for inp in screen.query("#prompt-input"):
+                inp.disabled = busy
+                inp.placeholder = placeholder
+        self._update_nav_status()
 
     @work(thread=True)
     def run_orchestrator(self, prompt: str) -> None:
         task_id = f"interactive-{uuid.uuid4().hex[:8]}"
-        
+
         task_spec = TaskSpec(
             issue_id=task_id,
             issue_description=prompt,
             workspace_dir=self.workspace,
             test_command=os.environ.get("HARNESS_TEST_COMMAND", None)
         )
-        
+
         memory = MemoryManager(base_dir=".harness")
         memory.initialize_task(task_spec.issue_id, task_spec.issue_description)
-        
+
         # Point UI provider to new memory
         if self.provider:
             self.provider.memory = memory
             self.provider.task_id = task_id
             self.provider.last_refresh_changed = True
-            
+
         # Re-scan for new task to be safe
         try:
             repo_index = RepositoryScanner().scan(self.workspace)
@@ -158,17 +164,17 @@ class HarnessTUI(App):
                 self.provider.repo = repo_index
         except Exception:
             repo_index = None
-            
+
         try:
             ctx_config = ContextConfig()
             builder = ContextBuilder(repository_index=repo_index, config=ctx_config)
             context = ContextAdapter(memory=memory, builder=builder)
-            
+
             tool_engine = ToolEngine(workspace_dir=self.workspace)
             verifier = VerificationEngine()
             model_adapter = ModelAdapter()
             config = OrchestratorConfig(step_limit=30)
-            
+
             orch = Orchestrator(
                 context=context,
                 tool_engine=tool_engine,
@@ -178,19 +184,24 @@ class HarnessTUI(App):
                 context_builder=builder,
                 config=config
             )
-            
+
             orch.run(task_spec)
         finally:
             self.call_from_thread(self._on_task_finished)
-            
+
     def _on_task_finished(self) -> None:
-        self.task_running = False
-        
-        # Only re-enable inputs that are currently mounted
-        for inp in self.query(Input):
-            inp.disabled = False
-            inp.placeholder = "Enter prompt to start a new task..."
-            inp.focus()
+        self._set_busy(False)
+        for screen in self.screen_stack:
+            for inp in screen.query("#prompt-input"):
+                inp.focus()
+                break
+
+    def _update_nav_status(self) -> None:
+        """Push busy state into NavigationWidget so status line updates in-place."""
+        for screen in self.screen_stack:
+            for nav in screen.query("NavigationWidget"):
+                nav.busy = self.busy
+                nav.update_status()
 
 def main():
     parser = argparse.ArgumentParser(description="AI Harness TUI")
@@ -225,15 +236,15 @@ def main():
     elif not args.demo:
         # M9-Lite interactive mode standby
         memory = MemoryManager(base_dir=".harness")
-        memory.initialize_task("interactive-standby", "Standby for input")
-        
+        memory.initialize_task("interactive-standby", "Ready")
+
         repo_index = None
         try:
             scanner = RepositoryScanner()
             repo_index = scanner.scan(args.workspace)
         except Exception:
             pass
-            
+
         engine = ContextDiagnosticsEngine()
         provider = TUIDataProvider(
             memory_manager=memory,
@@ -242,7 +253,13 @@ def main():
             task_id="interactive-standby"
         )
 
-    app = HarnessTUI(provider=provider, live=not args.demo, workspace=args.workspace)
+    interactive = not args.demo and not args.task
+    app = HarnessTUI(
+        provider=provider,
+        live=not args.demo,
+        interactive=interactive,
+        workspace=args.workspace,
+    )
     app.run()
 
 if __name__ == "__main__":
